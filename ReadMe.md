@@ -236,6 +236,8 @@ CHESHIRE is a concept for a living ARG experience in which AI does not merely ge
 
 This makes it a strong candidate for an immersive AI-media prototype, especially when the emphasis is on a single, polished mystery with clear proof that the fictional world is reacting to the audience.
 
+отсоси
+
 ---
 
 ## Repository status
