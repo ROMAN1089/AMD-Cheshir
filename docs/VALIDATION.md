@@ -2,7 +2,7 @@
 
 ## Completed checks
 
-- Backend: 51 isolated tests passed. Coverage additionally confirms that unknown-model lookup is accepted, candidate offers remain separate from item valuation, a forged candidate cannot be applied, seller confirmation is required, photo lookup cannot read outside the media directory and recognition preserves edited descriptions.
+- Backend: 64 isolated tests passed. Coverage includes unknown-model lookup, candidate/valuation separation, explicit model confirmation, media path safety, marketplace listing kits, supported price prefilling, seller-price preservation, ZIP output, destination/item-link validation, completed external sales, repeat-sale protection, copy-removal confirmation and replies that do not create fake buyer events.
 - Frontend: TypeScript check and production build passed. Browser review confirmed the category selector, inventory category filter and category-relevant specification fields.
 - English speech: the installed, checksum-verified local Whisper model accurately transcribed a diagnostic recording containing “Dell Latitude 5420”, “16 gigabytes”, “256 gigabyte”, included charger and an untested battery. Four seconds of silence produced no text.
 - Live video: a real 54,112,118-byte MOV from the public upstream repository passed upload, decoding, English speech recognition and AMD MiMo-V2.6-Flash extraction in 37 seconds. Five private drafts were created: office chair (Furniture), energy drink can (Other), backpack (Accessory), cap (Clothing) and MacBook Pro (Laptop). Exact model identifiers remained unknown where they could not be established. This run used a separate validation database, not the seller's inventory.
@@ -12,8 +12,11 @@
 - A subsequent seller upload completed with two observed product drafts in Electronics and Other. Unverified function, brand and model were flagged for review.
 - Final automatic price-research check: 25 pages checked in 73 seconds; two current asking prices accepted from two independent merchants. The three-page threshold was not met, so no numeric recommendation or sale-speed forecast was published.
 - Photo identification with Qwen3.8-Flash-Next correctly recognized the ambiguous suitcase record player and disassembled hard-drive components. The live unknown-model workflow renamed the unconfirmed draft to Portable Suitcase Record Player, classified it as Audio and discovered a source-backed Crosley resale candidate. The candidate remains explicitly unconfirmed, with no offer value or item valuation invented.
+- Live Facebook Marketplace kit download contained listing JSON, title, description, posting guide and the actual 84,810-byte product photo. Download did not create a posted external listing or fabricate a price when no supported estimate existed.
 
 ## Limits of these checks
+
+The current UI centers on external marketplace preparation. Listing-kit download is not publication. eBay Seller API authorization has not been connected; Facebook Marketplace and Craigslist use manual posting. External listing states and sales are seller-reported. Historical local-store checks above document earlier validation, not the current seller flow.
 
 The five-item capture validates multiple product categories, not recognition accuracy for every product or every recording. Poor lighting, unreadable labels and similar-looking objects still require seller review. These checks do not establish measured conversion uplift or market demand.
 

@@ -1,25 +1,46 @@
-# SnapSell
+# SnapSell — prepare once, sell on your marketplaces
 
-An English-language US resale workspace: video → reviewed inventory → source-backed asking prices → storefront → buyer questions and offers → seller-confirmed sales.
+SnapSell turns an inventory video into reviewed resale listings, researches asking prices, and prepares materials for **eBay, Facebook Marketplace and Craigslist**. Buyers and payments stay on those marketplaces.
 
-## Start locally
+## Current workflow
 
-Requires Python 3.11+, Node.js 22.12+ and pnpm. `ffmpeg` is supplied by the Python package; no system installation is needed.
+1. **Inventory:** upload real goods in an English-narrated video, or enter an item manually. AMD vision creates private drafts across 26 categories and Other. Local Whisper transcribes English speech.
+2. **Review & research:** confirm observed facts. Unknown models can be researched from the photo. Source-backed candidate models remain unconfirmed until the seller compares them. Numeric price recommendations require sufficient matching evidence.
+3. **Channels:** choose an item and marketplace. SnapSell prepares a suitable title, description, available asking price and real photo. Copy the text or download a ZIP listing kit. A supported market-median recommendation is prefilled when the seller has not already set a price; insufficient evidence leaves the price blank.
+4. **Post externally:** open the marketplace form and post in the seller's account. Record the actual published item URL in SnapSell. Downloading a kit never marks an item published.
+5. **Reply desk:** paste a buyer's marketplace question, review a fact-based response and copy it back. Replies are drafts; marketplace inboxes are not synchronized and SnapSell does not send messages.
+6. **Results:** record a completed external sale with the actual fee and acquisition cost. Contribution is sale price minus recorded fee and acquisition cost. Other recorded copies are flagged for removal; the seller confirms removal after ending them on the marketplace.
 
-From this directory in PowerShell:
+## Integration status
+
+| Destination | Working now | Direct publication |
+|---|---|---|
+| eBay | Listing ZIP, text/photo transfer, Inventory/Offer JSON draft, external-link tracking | Seller API not connected |
+| Facebook Marketplace | Listing ZIP, copyable text/photo, link tracking and reply drafts | Manual posting in the seller's account |
+| Craigslist | Listing ZIP, copyable text/photo, link tracking and reply drafts | Manual posting in the seller's selected city |
+
+eBay direct publication requires seller OAuth authorization, the correct leaf category and aspects, a supported condition, public photo URLs, inventory location and business policy IDs. The exported JSON identifies missing fields; it is **not** a complete live-publish request. [Official eBay publishing requirements](https://developer.ebay.com/api-docs/sell/static/inventory/publishing-offers.html).
+
+Craigslist bulk posting is access-controlled and intended for approved high-volume accounts in specific paid categories; this prototype uses manual posting. [Official bulk interface](https://www.craigslist.org/about/bulk_posting_interface). Facebook's seller flow is used for manual transfer. [Facebook selling help](https://www.facebook.com/help/550954179351183/).
+
+External listing statuses and completed sales are explicitly **seller-reported**, not API-verified or synchronized. No external posting, payment or message is performed by downloading or copying materials.
+
+## Local setup
+
+Tested with Python 3.11 and Node.js 22+; pnpm is required.
 
 ```powershell
 Copy-Item .env.example .env
-# Set AMD_API_KEY and SELLER_PASSWORD inside .env. Never commit this file.
+# Set AMD_API_KEY and optionally SELLER_PASSWORD in .env.
 python -m venv .venv
 .venv/Scripts/python -m pip install -r snapsell-backend/requirements.txt
 pnpm --dir snapsell-frontend install --frozen-lockfile
 .venv/Scripts/python snapsell-backend/speech.py
 ```
 
-The speech setup downloads a pinned, checksum-verified English model (~75 MB). It runs on CPU. Model files are cached in `data/models/tiny.en`; `ASR_MODEL_PATH` can point to an existing compatible model. Without the model, video extraction still works and clearly asks the seller to supply spoken facts manually.
+Speech setup downloads a pinned, checksum-verified model (~75 MB), cached in `data/models/tiny.en`. Audio transcription runs locally on CPU. AMD performs vision, product identity lookup, research planning, buyer-intent classification and evidence summaries. Available models are discovered at runtime; the API key stays on the server.
 
-Start the backend in one terminal and frontend in another:
+Run in two terminals from the repository root:
 
 ```powershell
 .venv/Scripts/python snapsell-backend/app.py
@@ -29,25 +50,15 @@ Start the backend in one terminal and frontend in another:
 pnpm --dir snapsell-frontend dev
 ```
 
-Open [SnapSell](http://127.0.0.1:3000). With `LOCAL_ACCESS=true`, the local quick-entry password is `snapsell-local`. For a network deployment, set `LOCAL_ACCESS=false`, a strong `SELLER_PASSWORD`, `COOKIE_SECURE=true` behind HTTPS, and configure the frontend backend address before building. The local quick-entry button is then disabled. Use a persistent data directory and a single backend process; the job queue is in-process, and interrupted jobs can be retried.
+Open [SnapSell](http://127.0.0.1:3000). `LOCAL_ACCESS=true` enables local quick entry with `snapsell-local`. Network deployments require `LOCAL_ACCESS=false`, a strong `SELLER_PASSWORD`, HTTPS and `COOKIE_SECURE=true`. Persist the data directory and run one backend process; interrupted jobs can be retried.
 
-## Use real inventory
+## Price decisions
 
-1. Upload an MP4, MOV, WebM or M4V, up to 180 seconds and 250 MB. Show real items one at a time: furniture, clothing, shoes, books, tools, toys, electronics, appliances or any other goods. Show readable labels and narrate included parts and known condition in English. Extraction supports up to 30 products per capture, with `Other` retaining products outside the named taxonomy. Game scenes, advertisements and pictures of products are not physical inventory.
-2. Review each draft. Confirm category-relevant details and enter acquisition cost, selling fee, minimum price and asking price. Clothing exposes size/material/color; furniture exposes dimensions/material; books expose author/ISBN/edition; electronics keep their own fields. Unknown facts remain unknown. Drafts are private until explicitly published.
-3. Choose **Identify & find matches** when the model is unknown. AMD recognizes the common product type from the photo and searches source-backed possible models. Compare a candidate and confirm **This matches my item** before its identity can support a valuation. Once an exact model is saved, price research starts automatically. Inspect prices and source evidence under **Pricing evidence**. Three independent product pages from at least two merchants are needed for a numeric recommendation.
-4. Open **View store** to ask buyer questions and submit an offer. The seller controls whether a completed deal is recorded. The service does not collect payment or automatically book meetings.
-5. Insights use recorded buyer events and completed deals. Contribution deducts recorded cost and fees, with the sale's economics frozen at completion. No fabricated views, revenue or sales forecasts are added.
+The system starts without fabricated inventory, offers or buyer activity. Prices come from retrievable merchant evidence, not generated numbers. Web valuation requires at least three distinct matching product pages from two merchants. Variant/tracking links do not manufacture independent observations. Merchant-balanced recency weights, a MAD outlier check and weighted quartiles produce asking-price positions constrained by recorded cost, fee estimate and seller minimum. Asking prices do not prove completed sales.
 
-## AMD and numeric decisions
+Without sufficient real seven-day outcomes, sale probability and expected-return forecasts remain unavailable. See [price research](docs/PRICE_RESEARCH.md) and [validation](docs/VALIDATION.md).
 
-AMD Token Factory performs multimodal inventory extraction, photo identification, candidate-model lookup, search planning, adaptive search refinement, buyer-intent classification and a bounded evidence summary. Available models are discovered from `/models`; Qwen3.8-Flash-Next is the preferred vision model after direct comparison on an ambiguous record-player capture. Explicit model overrides are supported. The API key stays on the server. Speech uses local Whisper because the event gateway currently rejects the audio input format.
-
-Prices come from retrievable merchant evidence, not model-generated numbers. Merchant-balanced recency weights, a MAD outlier check and weighted quartiles produce asking-price positions. Fee-adjusted break-even and seller minimum constrain every recommendation. Used inventory and refurbished retail are separate condition classes. A refurbished retail reference does not become a private used-item valuation.
-
-Without at least 120 fully labeled real seven-day outcomes, sale probability and expected-return forecasts are unavailable. The existing forecast feature schema is limited to laptops and monitors; other categories use observed market comparisons without inheriting that model. An observed price is not evidence that an item sold or that a price change will improve revenue. See [price research details](docs/PRICE_RESEARCH.md).
-
-## Validation
+## Checks and provenance
 
 ```powershell
 .venv/Scripts/python -m pip install pytest
@@ -56,10 +67,6 @@ pnpm --dir snapsell-frontend typecheck
 pnpm --dir snapsell-frontend build
 ```
 
-Backend tests use a separate temporary database and do not call paid inference or add demo inventory. Live verification should also use a separate `DATA_DIR` so diagnostic offers and sales never enter the seller's workspace.
-
-## Origin and limits
-
-Based on [CollinQ/sbhacks2025](https://github.com/CollinQ/sbhacks2025), preserved with its MIT license under `upstream/`. The runtime extends the original Flask/video approach with a new commerce workflow and English frontend. SQLite provides persistent single-store storage; this is not yet a multi-tenant marketplace. There is no external marketplace publishing integration or payment processing. Token Factory is an experimental event service for development and trials; use an appropriate supported endpoint before serving production customers.
+Tests use an isolated database. Source derives from [CollinQ/sbhacks2025](https://github.com/CollinQ/sbhacks2025), preserved with its MIT license under `upstream/`. SQLite provides a persistent single-seller runtime. AMD Token Factory is an experimental development service; deployment for production customers needs an appropriate supported inference endpoint.
 
 The repository's earlier CHESHIRE concept is preserved in [docs/CHESHIRE_CONCEPT.md](docs/CHESHIRE_CONCEPT.md).

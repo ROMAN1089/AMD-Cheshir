@@ -25,6 +25,7 @@ import amd
 import commerce
 import video
 import research
+import channels
 from catalog import CATEGORIES
 
 app=Flask(__name__)
@@ -201,6 +202,48 @@ def publish(item_id):
     item.update(status='listed',confirmed=True)
     store.put('items',item); store.event(item_id,'publish')
     return jsonify(item)
+
+@app.get('/api/channels')
+def channels_workspace():return jsonify(channels.workspace())
+
+@app.get('/api/items/<item_id>/channels/<name>')
+def listing_kit(item_id,name):return jsonify(channels.prepare(item_or_404(item_id),name)[0])
+
+@app.get('/api/items/<item_id>/channels/<name>/download')
+def download_listing_kit(item_id,name):
+    data,kit=channels.bundle(item_or_404(item_id),name)
+    return app.response_class(data,mimetype='application/zip',headers={'Content-Disposition':f'attachment; filename=snapsell-{name}-{item_id}.zip'})
+
+@app.post('/api/items/<item_id>/channels/<name>/link')
+def save_external_listing(item_id,name):
+    d=body()
+    if d.get('confirm_posted') is not True:raise Invalid('Confirm that you posted this listing on the external marketplace.')
+    return jsonify(channels.record_listing(item_or_404(item_id),name,str(d.get('url','')).strip()))
+
+@app.post('/api/items/<item_id>/channels/sale')
+def record_external_sale(item_id):
+    d=body();item_or_404(item_id)
+    if d.get('confirm_completed') is not True:raise Invalid('Confirm the external transaction is complete.')
+    return jsonify(channels.complete_sale(item_id,str(d.get('listing_id','')),number(d.get('amount'),'Sale price',.01),number(d.get('fee'),'Actual fee paid',0),number(d.get('cost'),'Acquisition cost',0)))
+
+@app.post('/api/channels/listings/<listing_id>/removed')
+def confirm_external_removal(listing_id):
+    d=body();listing=store.get('actions',listing_id)
+    if not listing or listing.get('type')!='external_listing' or listing.get('status') not in ['posted','needs_removal']:raise Invalid('Choose an active external listing.')
+    if d.get('confirm_removed') is not True:raise Invalid('Confirm that you removed the listing on the marketplace.')
+    listing.update(status='removed',removed_at=store.now(),source='seller_reported');return jsonify(store.put('actions',listing))
+
+@app.post('/api/items/<item_id>/channels/<name>/reply')
+def marketplace_reply(item_id,name):
+    d=body();message=str(d.get('message','')).strip()
+    if not 1<=len(message)<=2000:raise Invalid('Paste a buyer message up to 2,000 characters.')
+    return jsonify(channels.draft_reply(item_or_404(item_id),amd.redact(message),name))
+
+@app.post('/api/items/<item_id>/review')
+def confirm_listing_facts(item_id):
+    item=item_or_404(item_id)
+    if body().get('confirm_facts') is not True:raise Invalid('Confirm that you reviewed the product facts.')
+    item.update(confirmed=True);return jsonify(store.put('items',item))
 
 @app.post('/api/items/<item_id>/strategy')
 def strategy(item_id):

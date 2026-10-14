@@ -315,3 +315,66 @@ def test_profile_updates_generated_description_but_preserves_edits(item):
     assert 'product type' not in updated['uncertainties'][0].lower()
     edited=identity.apply_profile({**original,'description':'Seller inspected and added specific notes.'},original,visual,'vision-test')
     assert edited['description']=='Seller inspected and added specific notes.'
+
+@pytest.mark.parametrize('name',['ebay','facebook','craigslist'])
+def test_external_kit_is_a_draft_not_publication(item,seller,name):
+    import channels,io,zipfile
+    before=store.get('items',item['id'])
+    result=seller.get(f'/api/items/{item["id"]}/channels/{name}').json
+    assert result['publication_status']=='not_published' and result['price_usd']==300
+    assert 'cost' not in result and 'reserve' not in result
+    archive=seller.get(f'/api/items/{item["id"]}/channels/{name}/download')
+    assert archive.status_code==200 and archive.mimetype=='application/zip'
+    with zipfile.ZipFile(io.BytesIO(archive.data)) as z:
+        assert {'listing.json','title.txt','description.txt','POSTING_GUIDE.txt'}<=set(z.namelist())
+        assert not any(n.endswith('.svg') for n in z.namelist())
+    assert store.get('items',item['id'])==before and not channels.workspace()['listings']
+
+def test_no_unsupported_price_inserted_into_kit(item):
+    import channels
+    kit,_=channels.prepare({**item,'price':0,'model_key':'unknown'},'ebay')
+    assert kit['price_usd'] is None and not kit['ready_for_manual_posting']
+    assert 'pricingSummary' not in kit['ebay_draft']['offer']
+
+def test_kit_prefills_supported_price_but_preserves_seller_price(item):
+    import channels
+    for j,price in enumerate([240,250,260]):
+        r=research.parse_offers(document(price),item)[0][0]
+        r.update(id=str(j),item_id=item['id'],item_fingerprint=research.fingerprint(item),url=f'https://shop{j}.example/product',source_name=f'shop{j}.example')
+        store.put('comparables',r)
+    kit,_=channels.prepare({**item,'price':0},'facebook')
+    assert kit['price_usd']==pytest.approx(250,abs=1) and kit['price_source']=='Verified market median'
+    assert channels.prepare(item,'facebook')[0]['price_usd']==300
+
+@pytest.mark.parametrize('url',['https://ebay.com','https://evil.example/itm/123','https://ebay.com.evil.example/itm/123','http://www.ebay.com/itm/123','https://user:secret@ebay.com/itm/123'])
+def test_external_listing_link_validates_marketplace_and_item_path(item,seller,url):
+    r=seller.post(f'/api/items/{item["id"]}/channels/ebay/link',json={'url':url,'confirm_posted':True})
+    assert r.status_code==400
+
+def test_external_sale_is_atomic_and_marks_other_copies_for_removal(item,seller):
+    first=seller.post(f'/api/items/{item["id"]}/channels/ebay/link',json={'url':'https://www.ebay.com/itm/123456789','confirm_posted':True}).json
+    second=seller.post(f'/api/items/{item["id"]}/channels/facebook/link',json={'url':'https://www.facebook.com/marketplace/item/123456789','confirm_posted':True}).json
+    data={'listing_id':first['id'],'amount':280,'fee':20,'cost':100,'confirm_completed':True}
+    assert seller.post(f'/api/items/{item["id"]}/channels/sale',json=data).status_code==200
+    assert seller.post(f'/api/items/{item["id"]}/channels/sale',json=data).status_code==400
+    summary=seller.get('/api/channels').json
+    assert summary['revenue']==280 and summary['net_contribution']==160 and len(summary['sales'])==1
+    assert store.get('actions',second['id'])['status']=='needs_removal'
+    assert seller.post(f'/api/channels/listings/{second["id"]}/removed',json={}).status_code==400
+    assert seller.post(f'/api/channels/listings/{second["id"]}/removed',json={'confirm_removed':True}).status_code==200
+    assert store.get('actions',second['id'])['status']=='removed'
+    assert store.get('items',item['id'])['status']=='sold'
+    assert summary['sales'][0]['source']=='seller_reported'
+
+def test_external_reply_is_not_sent_and_does_not_create_fake_buyer_events(item,seller,monkeypatch):
+    import channels
+    monkeypatch.setattr(channels.amd,'configured',lambda:False)
+    r=seller.post(f'/api/items/{item["id"]}/channels/facebook/reply',json={'message':'Is the stand included?'})
+    assert r.status_code==200 and r.json['sent'] is False and r.json['mode']=='draft_only'
+    assert 'Stand and power cable' in r.json['answer']
+    assert store.events()==[] and store.all_rows('conversations')==[]
+
+def test_review_confirms_facts_without_publishing_store_listing(item,seller):
+    store.put('items',{**item,'status':'draft','confirmed':False})
+    response=seller.post(f'/api/items/{item["id"]}/review',json={'confirm_facts':True})
+    assert response.status_code==200 and response.json['confirmed'] is True and response.json['status']=='draft'
