@@ -1,245 +1,65 @@
-# CHESHIRE
+# SnapSell
 
-AI-powered living campaigns: a fictional world that reacts to the community and evolves through collective investigation.
+An English-language US resale workspace: video → reviewed inventory → source-backed asking prices → storefront → buyer questions and offers → seller-confirmed sales.
 
-## What is CHESHIRE?
+## Start locally
 
-CHESHIRE is a concept for a next-generation ARG (alternate reality game) and interactive campaign system. Instead of a static sequence of hidden pages, the story becomes a living narrative where the fictional world changes as players uncover evidence, connect clues, and trigger AI-driven transformations.
+Requires Python 3.11+, Node.js 22.12+ and pnpm. `ffmpeg` is supplied by the Python package; no system installation is needed.
 
-The core idea is simple but powerful:
+From this directory in PowerShell:
 
-- players are not just consuming a campaign;
-- they are making discoveries that alter the story world;
-- the AI acts as an in-world system that reacts to the investigation;
-- the campaign becomes a shared, evolving experience rather than a fixed chain of pages.
+```powershell
+Copy-Item .env.example .env
+# Set AMD_API_KEY and SELLER_PASSWORD inside .env. Never commit this file.
+python -m venv .venv
+.venv/Scripts/python -m pip install -r snapsell-backend/requirements.txt
+pnpm --dir snapsell-frontend install --frozen-lockfile
+.venv/Scripts/python snapsell-backend/speech.py
+```
 
----
+The speech setup downloads a pinned, checksum-verified English model (~75 MB). It runs on CPU. Model files are cached in `data/models/tiny.en`; `ASR_MODEL_PATH` can point to an existing compatible model. Without the model, video extraction still works and clearly asks the seller to supply spoken facts manually.
 
-## Core concept
+Start the backend in one terminal and frontend in another:
 
-### The Ninth Signal
+```powershell
+.venv/Scripts/python snapsell-backend/app.py
+```
 
-The demo concept is built around a fictional research archive called Vesper Institute.
+```powershell
+pnpm --dir snapsell-frontend dev
+```
 
-At first, the archive looks like a normal institutional website: old documents, technical logs, employee pages, and project notes. There is no obvious sign that it is an ARG. Then one of the documents reveals a hidden research project — Project 09.
+Open [SnapSell](http://127.0.0.1:3000). With `LOCAL_ACCESS=true`, the local quick-entry password is `snapsell-local`. For a network deployment, set `LOCAL_ACCESS=false`, a strong `SELLER_PASSWORD`, `COOKIE_SECURE=true` behind HTTPS, and configure the frontend backend address before building. The local quick-entry button is then disabled. Use a persistent data directory and a single backend process; the job queue is in-process, and interrupted jobs can be retried.
 
-The timeline points to a specific date and time:
+## Use real inventory
 
-- 17 November
-- 03:42
+1. Upload an MP4, MOV, WebM or M4V, up to 180 seconds and 250 MB. Show real items one at a time: furniture, clothing, shoes, books, tools, toys, electronics, appliances or any other goods. Show readable labels and narrate included parts and known condition in English. Extraction supports up to 30 products per capture, with `Other` retaining products outside the named taxonomy. Game scenes, advertisements and pictures of products are not physical inventory.
+2. Review each draft. Confirm category-relevant details and enter acquisition cost, selling fee, minimum price and asking price. Clothing exposes size/material/color; furniture exposes dimensions/material; books expose author/ISBN/edition; electronics keep their own fields. Unknown facts remain unknown. Drafts are private until explicitly published.
+3. Choose **Identify & find matches** when the model is unknown. AMD recognizes the common product type from the photo and searches source-backed possible models. Compare a candidate and confirm **This matches my item** before its identity can support a valuation. Once an exact model is saved, price research starts automatically. Inspect prices and source evidence under **Pricing evidence**. Three independent product pages from at least two merchants are needed for a numeric recommendation.
+4. Open **View store** to ask buyer questions and submit an offer. The seller controls whether a completed deal is recorded. The service does not collect payment or automatically book meetings.
+5. Insights use recorded buyer events and completed deals. Contribution deducts recorded cost and fees, with the sale's economics frozen at completion. No fabricated views, revenue or sales forecasts are added.
 
-From this point, players begin to find contradictory evidence:
+## AMD and numeric decisions
 
-- server logs after the reported shutdown;
-- hidden audio records;
-- missing or altered employee pages;
-- discrepancies between public and restricted documents.
+AMD Token Factory performs multimodal inventory extraction, photo identification, candidate-model lookup, search planning, adaptive search refinement, buyer-intent classification and a bounded evidence summary. Available models are discovered from `/models`; Qwen3.8-Flash-Next is the preferred vision model after direct comparison on an ambiguous record-player capture. Explicit model overrides are supported. The API key stays on the server. Speech uses local Whisper because the event gateway currently rejects the audio input format.
 
-The community begins to assemble the story together in Discord, across notes, screenshots, and archives.
+Prices come from retrievable merchant evidence, not model-generated numbers. Merchant-balanced recency weights, a MAD outlier check and weighted quartiles produce asking-price positions. Fee-adjusted break-even and seller minimum constrain every recommendation. Used inventory and refurbished retail are separate condition classes. A refurbished retail reference does not become a private used-item valuation.
 
-Once enough evidence is collected, they unlock a restricted archive and trigger a real narrative shift.
+Without at least 120 fully labeled real seven-day outcomes, sale probability and expected-return forecasts are unavailable. The existing forecast feature schema is limited to laptops and monitors; other categories use observed market comparisons without inheriting that model. An observed price is not evidence that an item sold or that a price change will improve revenue. See [price research details](docs/PRICE_RESEARCH.md).
 
----
+## Validation
 
-## Why this is interesting
+```powershell
+.venv/Scripts/python -m pip install pytest
+.venv/Scripts/python -m pytest snapsell-backend/tests -q
+pnpm --dir snapsell-frontend typecheck
+pnpm --dir snapsell-frontend build
+```
 
-The real innovation is not "AI generates content" in the abstract.
+Backend tests use a separate temporary database and do not call paid inference or add demo inventory. Live verification should also use a separate `DATA_DIR` so diagnostic offers and sales never enter the seller's workspace.
 
-The real innovation is this:
+## Origin and limits
 
-- the fictional world has memory;
-- it reacts to collective discoveries;
-- it edits its own documents and narrative layers;
-- it keeps a coherent reality across multiple players and interfaces.
+Based on [CollinQ/sbhacks2025](https://github.com/CollinQ/sbhacks2025), preserved with its MIT license under `upstream/`. The runtime extends the original Flask/video approach with a new commerce workflow and English frontend. SQLite provides persistent single-store storage; this is not yet a multi-tenant marketplace. There is no external marketplace publishing integration or payment processing. Token Factory is an experimental event service for development and trials; use an appropriate supported endpoint before serving production customers.
 
-This turns the campaign into a living system rather than a linear scavenger hunt.
-
----
-
-## AI as a game character
-
-Instead of exposing the model as a generic chatbot, the concept frames AI as a digital archivist or internal system left behind after a failed experiment.
-
-It behaves like a character with:
-
-- a restricted viewpoint;
-- memory about previous discoveries;
-- changing behavior depending on how far players have progressed;
-- a desire to hide or control certain facts.
-
-### Example behavior states
-
-1. Guardian state
-   - denies the existence of the experiment;
-   - provides only public documents and formal responses;
-   - tries to keep the truth hidden.
-
-2. Suspicious state
-   - begins to ask questions back;
-   - notices players are close to the truth;
-   - leaves traces and clues that were not previously visible.
-
-3. Reactive state
-   - starts editing the archive;
-   - removes or modifies employee records;
-   - changes pages to reflect new discoveries;
-   - creates new contradictions that become the next puzzle.
-
-This means the AI is not simply decorative — it becomes part of the investigative structure itself.
-
----
-
-## The key mechanic: world mutation
-
-The strongest version of the concept is not a single AI-generated page after a trigger.
-
-It is a system where players influence how the fictional world evolves.
-
-### The loop looks like this:
-
-1. Players find evidence.
-2. They connect different sources.
-3. They trigger a validated unlock condition.
-4. The world state changes.
-5. AI updates pages, documents, logs, and messages.
-6. The new differences become the next clue.
-7. The investigation continues with the altered reality.
-
-This creates a story where the campaign is not only discovered — it is actively shaped by the audience.
-
----
-
-## Demo story structure
-
-A strong MVP should focus on one complete mystery, not a broad platform.
-
-### MVP flow
-
-- Two players discover different fragments of evidence.
-- The clues are distributed across different interfaces or channels.
-- They combine the details into a real-world narrative conclusion.
-- A confirmed community discovery triggers a structured world mutation.
-- AI modifies the in-world archive and responds with a new set of narrative states.
-- The updated sources become the next puzzle layer.
-
-The goal is to demonstrate that the world itself is reacting to collective investigation.
-
----
-
-## Why it fits the hackathon track
-
-This concept is relevant to interactive, audience-driven storytelling and adaptive media.
-
-It aligns with the idea of:
-
-- audience participation;
-- AI-driven narrative adaptation;
-- world state changes based on real user actions;
-- community co-creation of a story;
-- transition from passive content to interactive media experiences.
-
-In other words, CHESHIRE is not just a gimmick or a chatbot demo. It is a living story environment that changes in response to how the audience behaves.
-
----
-
-## Technical direction
-
-For a first version, the recommended architecture is:
-
-- Frontend: React
-- Backend: FastAPI
-- Realtime layer: Supabase Realtime
-- AI inference: AMD Developer Cloud / LLM infrastructure
-
-The important technical principle is to keep the narrative controlled.
-
-The AI should generate allowed changes inside a constrained world model, while the game engine remains responsible for:
-
-- maintaining truth states;
-- validating discoveries;
-- preventing impossible or contradictory outcomes;
-- making sure key plot beats remain solvable.
-
-In practice, the model is best used for:
-
-- reactive narrative writing;
-- world mutation proposals;
-- variations in tone and persuasion;
-- generating new files, messages, and historical fragments.
-
-The game engine makes sure the source-of-truth remains coherent.
-
----
-
-## Project priorities
-
-### P0 — must have
-
-- one complete mystery;
-- two connected user paths;
-- shared world state;
-- real AI-driven changes to fictional sources;
-- validation of model outputs;
-
-### P1 — nice to have
-
-- AI character with memory;
-- different narrative states for the same archive;
-- cost and latency tracking for generation;
-
-### P2 — defer
-
-- broad campaign generator;
-- full Discord integration;
-- autonomous generation of complex puzzle systems.
-
----
-
-## Business value
-
-ARGs are already proven as strong brand and entertainment experiences. The difference here is that CHESHIRE transforms ARG from a one-off campaign format into a living AI-powered storytelling system.
-
-This has strategic value for:
-
-- film promotion;
-- immersive brand campaigns;
-- cultural storytelling projects;
-- interactive media experiences built around audience participation.
-
-The business opportunity is not that AI can generate a campaign from scratch in one click. The real value is that it can sustain a story world that responds to real behavior and community actions.
-
----
-
-## Final positioning
-
-The original concept describes CHESHIRE as an AI platform that auto-generates ARGs.
-
-A stronger positioning for the hackathon is:
-
-> CHESHIRE — Stories That Fight Back
->
-> The first AI-powered living campaign where the fictional world reacts to collective discoveries.
-
-This is more compelling because it focuses on the actual wow moment:
-
-- the story responds to the audience;
-- the archive changes in reaction to discoveries;
-- the world itself becomes a participant in the mystery.
-
-That is the idea worth demonstrating.
-
----
-
-## Summary
-
-CHESHIRE is a concept for a living ARG experience in which AI does not merely generate text — it helps maintain and mutate an entire fictional reality. Players discover evidence, solve a mystery together, and trigger story changes that are then reflected in the archive itself. The campaign becomes collaborative, adaptive, and dynamic.
-
-This makes it a strong candidate for an immersive AI-media prototype, especially when the emphasis is on a single, polished mystery with clear proof that the fictional world is reacting to the audience.
-
-отсоси
-
----
-
-## Repository status
-
-This repository currently contains the project concept and planning notes for CHESHIRE.
+The repository's earlier CHESHIRE concept is preserved in [docs/CHESHIRE_CONCEPT.md](docs/CHESHIRE_CONCEPT.md).

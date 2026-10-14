@@ -1,0 +1,10 @@
+Flask==3.1.2
+requests==2.32.5
+python-dotenv==1.2.1
+opencv-python-headless==4.12.0.88
+numpy==2.2.6
+waitress==3.0.2
+imageio-ffmpeg==0.6.0
+ddgs==9.16.0
+beautifulsoup4==4.14.3
+faster-whisper==1.2.1
