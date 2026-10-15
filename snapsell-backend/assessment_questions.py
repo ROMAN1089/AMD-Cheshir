@@ -22,6 +22,7 @@ def set_assessment_questions(item,arguments):
     for row in proposed:
         if not isinstance(row,dict):raise ValueError('Question must be an object.')
         key=row.get('key','');label=row.get('label','');hint=row.get('hint','')
+        if isinstance(key,str) and key in {'working','condition','included','repairs','repair_details','fault_type','fault_details','battery','storage','carrier','activation_lock'}:continue
         if not isinstance(key,str) or not re.fullmatch(r'[a-z][a-z0-9_]{1,39}',key) or key in RESERVED or key in seen:raise ValueError('Question tool key is invalid or reserved.')
         if not isinstance(label,str) or not 3<=len(label)<=140 or not isinstance(hint,str) or len(hint)>350:raise ValueError('Question text is invalid.')
         options=row.get('options',[])
@@ -57,7 +58,7 @@ def run(item_id,key):
         if version(store.get('items',item_id) or {})!=record['version']:
             record.update(status='superseded',message='The item identity changed.');store.put('actions',record);return
         record.update(status='completed',questions=questions,model=model,message='Additional questions tailored to this item. Answers come only from recorded item facts.' if questions else 'AI reviewed this item; the existing core questions cover its assessment.',finished_at=store.now())
-    except (ValueError,RuntimeError):record.update(status='fallback',message='AI questions are unavailable; category questions remain usable. You can retry.',questions=[])
+    except (ValueError,RuntimeError) as exc:record.update(status='fallback',message='AI questions could not be prepared; category questions remain usable. You can retry.',questions=[],diagnostic=str(exc)[:300])
     except Exception:record.update(status='fallback',message='AI questions could not be prepared; category questions remain usable.',questions=[])
     store.put('actions',record)
 

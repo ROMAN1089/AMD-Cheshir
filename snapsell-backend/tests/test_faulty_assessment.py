@@ -163,3 +163,10 @@ def test_ai_does_not_repeat_core_questions_under_aliases(item):
  rows=[{'key':'fault_description','label':'Describe the current fault'}, {'key':'accessories_included','label':'What accessories are included?'}, {'key':'repair_history','label':'Has it ever been repaired?'}, {'key':'model_variant','label':'Which exact iPhone 16 variant is this?'}, {'key':'face_id_status','label':'Does Face ID work?','options':['Yes','No']}]
  result=assessment_questions.set_assessment_questions(unit,{'questions':rows})
  assert [r['key'] for r in result]==['face_id_status']
+
+
+def test_repeated_core_field_does_not_discard_useful_ai_questions(item):
+ unit=phone(item)
+ rows=[{'key':'fault_details','label':'Describe the fault'}, {'key':'face_id_status','label':'Does Face ID work?','options':['Yes','No']}]
+ result=assessment_questions.set_assessment_questions(unit,{'questions':rows})
+ assert [r['key'] for r in result]==['face_id_status']
