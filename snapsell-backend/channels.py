@@ -7,7 +7,7 @@ import io,json,zipfile,hashlib,html,re
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
-import store,pricing,commerce,amd
+import store,pricing,commerce,amd,faults
 
 PLATFORMS={
  'ebay':{'name':'eBay','url':'https://www.ebay.com/sl/sell','mode':'listing_kit','integration':'Seller API authorization and listing policies required for direct publishing.','hosts':['ebay.com'],'title_limit':80},
@@ -27,7 +27,8 @@ def prepare(item,name):
  recommendation=next((s for s in report.get('strategies',[]) if s['id']=='balanced'),None)
  price=item['price'] if item['price']>0 else recommendation['price'] if recommendation else None
  price_source='Seller price' if item['price']>0 else ('Verified market median' if report['comparables']['source']=='verified_web' else 'Seller-provided comparable median') if recommendation else 'More matching price evidence needed'
- title=item['title']
+ fault_profile=faults.profile(item)
+ title=('For repair: ' if fault_profile['faulty'] else '')+item['title']
  if len(title)>destination['title_limit']:
   title=title[:destination['title_limit']]
   if ' ' in title:title=title.rsplit(' ',1)[0]
@@ -36,6 +37,7 @@ def prepare(item,name):
  for k,v in item.get('specs',{}).items():
   if v and not any(w in str(v).lower() for w in ['not verified','unknown','not tested']):facts.append(k.replace('_',' ').title()+': '+str(v))
  description=item.get('description','').strip()
+ if fault_profile['faulty']:facts.insert(0,'FAULTY / FOR REPAIR: '+(', '.join(fault_profile['types']) or 'Fault not yet diagnosed')+'. '+str(fault_profile['details']))
  text=description+'\n\n'+'\n'.join(facts)
  image=item.get('image','');photo=None
  if image.startswith('/media/'):
@@ -47,7 +49,7 @@ def prepare(item,name):
  if price is None:missing.append('Choose a price or gather enough matching market evidence.')
  elif price<max(item['reserve'],item['cost']/(1-item['fee_rate'])):missing.append('The asking price is below your recorded minimum or fee-adjusted acquisition cost.')
  if photo is None:missing.append('Add a real product photo on the marketplace; the placeholder is not exported.')
- kit={'item_id':item['id'],'platform':name,'platform_name':destination['name'],'title':title,'description':text.strip(),'price_usd':price,'price_source':price_source,'condition':item['condition'],'category_hint':item['category'],'photo_available':photo is not None,'ready_for_manual_posting':not missing,'missing':missing,'open_url':destination['url'],'integration':destination['integration'],'listing_version':version(item),'publication_status':'not_published'}
+ kit={'item_id':item['id'],'platform':name,'platform_name':destination['name'],'title':title,'description':text.strip(),'price_usd':price,'price_source':price_source,'condition':'For parts / not working' if fault_profile['faulty'] else item['condition'],'fault_profile':fault_profile,'category_hint':item['category'],'photo_available':photo is not None,'ready_for_manual_posting':not missing,'missing':missing,'open_url':destination['url'],'integration':destination['integration'],'listing_version':version(item),'publication_status':'not_published'}
  kit['price_evidence']={'basis':report['comparables']['basis'],'confidence':report['comparables'].get('confidence'),'sources':[{k:r.get(k) for k in ['title','price','condition','url','source_name','observed_at','included','exclusion_reason']} for r in report['comparables'].get('rows',[])]}
  if name=='ebay':
   aspects={k.replace('_',' ').title():[str(v)] for k,v in item.get('specs',{}).items() if v and 'not verified' not in str(v).lower()}

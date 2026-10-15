@@ -59,7 +59,8 @@ def test_one_merchant_with_many_variants_not_enough_for_draft(phone):
 def test_faults_locks_and_low_battery_block_working_device_price(phone,changes):
     phone=complete(phone);phone=assessment.save_answers(phone,changes);offers(phone)
     r=pricing.comparables(phone)['preliminary']
-    assert r['suggested_price'] is None and r['blocked_reason']
+    assert r is None
+    assert not pricing.evaluate(phone)['strategies']
 
 def test_draft_fill_respects_existing_price_and_fingerprint(phone):
     phone=complete(phone);offers(phone)

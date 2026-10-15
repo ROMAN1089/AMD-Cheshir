@@ -32,15 +32,18 @@ def request(path,params=None):
     return r.json()
 
 def collect(item):
-    import research
+    import research,faults
     rows=[];sources=[]
     try:
-        result=request('/item_summary/search',{'q':item['title'],'limit':10,'filter':'priceCurrency:USD,itemLocationCountry:US,buyingOptions:{FIXED_PRICE},conditions:{USED}'})
+        condition_filter='conditionIds:{7000}' if item.get('specs',{}).get('working')=='No' else 'conditions:{USED}'
+        query=item['title']+' '+str(item.get('specs',{}).get('storage',''))+' '+faults.terms(item,'US')
+        result=request('/item_summary/search',{'q':query.strip(),'limit':10,'filter':'priceCurrency:USD,itemLocationCountry:US,buyingOptions:{FIXED_PRICE},'+condition_filter})
         for summary in result.get('itemSummaries',[])[:10]:
             details=request('/item/'+quote(summary['itemId'],safe=''))
             name=str(details.get('title',''));url=details.get('itemWebUrl','');reason=None
-            matched,reason=research.model_match(item,name,json.dumps(details.get('localizedAspects',[]),ensure_ascii=False))
-            condition=research.condition_from(details.get('condition',''),name)
+            description=str(details.get('condition',''))+' '+str(details.get('shortDescription',''))+' '+json.dumps(details.get('localizedAspects',[]),ensure_ascii=False)
+            matched,reason=research.model_match(item,name,description)
+            condition=research.condition_from(details.get('condition',''),name+' '+description)
             available=any(a.get('estimatedAvailabilityStatus')=='IN_STOCK' for a in details.get('estimatedAvailabilities',[]))
             if not matched or condition in ['New','Unknown'] or not available or details.get('itemLocation',{}).get('country')!='US':
                 sources.append({'url':url,'status':'rejected','reason':reason if not matched else 'Current available US pre-owned offer not confirmed.'});continue
@@ -50,6 +53,7 @@ def collect(item):
             username=details.get('seller',{}).get('username')
             if price.get('currency')!='USD' or value<=0 or not username:continue
             proof={k:details.get(k) for k in ['itemId','title','price','condition','localizedAspects','itemLocation','estimatedAvailabilities','shippingOptions']}
+            proof['description']=description[:3000]
             row=dict(title=name,model_key=item['model_key'],price=value,currency='USD',market='US',match_level=item.get('_research_mode','exact'),kind='asking',condition=condition,source='verified_api',source_name='eBay',seller_id='ebay:'+username,url=research.canonical(url),observed_at=store.now(),age_days=0,page_sha256=hashlib.sha256(json.dumps(proof,sort_keys=True).encode()).hexdigest(),evidence=proof,verification='Official eBay Browse getItem response',availability='InStock',match_reason=reason,transaction_verified=False,shipping='Delivery and taxes not verified')
             for option in details.get('shippingOptions',[]):
                 cost=option.get('shippingCost',{})

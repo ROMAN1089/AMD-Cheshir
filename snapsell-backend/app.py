@@ -26,6 +26,7 @@ import commerce
 import video
 import research
 import assessment
+import assessment_questions
 import markets
 import outcomes
 import deals
@@ -216,7 +217,7 @@ def research_item(item_id):
     item=item_or_404(item_id)
     if request.method=='GET':
         market=request.args.get('market','US');mode=request.args.get('mode','exact');basis=request.args.get('basis','item')
-        return jsonify(questions=assessment.questions(item),item=item,job=research.latest(item_id,market,mode),pricing=pricing.evaluate(item,market,mode,basis),schedule=research.schedule(item_id,market,mode),outcome_window=outcomes.current(item_id))
+        return jsonify(question_job=assessment_questions.ensure(item),questions=assessment.questions(item),item=item,job=research.latest(item_id,market,mode),pricing=pricing.evaluate(item,market,mode,basis),schedule=research.schedule(item_id,market,mode),outcome_window=outcomes.current(item_id))
     d=body(); urls=d.get('source_urls',[])
     markets.get(d.get('market','US'))
     if d.get('mode','exact') not in ['exact','similar']:raise Invalid('Choose exact or similar product comparison.')
@@ -226,6 +227,22 @@ def research_item(item_id):
     if 'answers' in d:item=assessment.save_answers(item,d['answers'])
     if 'auto_refresh' in d:research.schedule(item_id,d.get('market','US'),d.get('mode','exact'),d['auto_refresh'],urls)
     return jsonify(job=research.start(item_id,urls,d.get('market','US'),d.get('mode','exact'),fill_draft_price=d.get('fill_draft_price',False))),202
+
+@app.post('/api/items/<item_id>/assessment/questions')
+def tailored_questions(item_id):
+    item=item_or_404(item_id)
+    return jsonify(question_job=assessment_questions.ensure(item,force=True),questions=assessment.questions(item))
+
+@app.post('/api/items/<item_id>/assessment/price')
+@ebay.serialized
+def apply_assessed_price(item_id):
+    item=item_or_404(item_id);d=body()
+    if item.get('price',0)>0:raise Invalid('An asking price is already set. Edit it in Listing to replace it.')
+    job=research.latest(item_id,'US','exact')
+    if not job or job.get('status')!='completed' or d.get('research_id')!=job['id']:raise Invalid('Choose the latest completed USD research result.')
+    applied=assessment.apply_draft_price(item_id,job)
+    if not applied:raise Invalid('No suitable draft price for the recorded configuration and fault profile. Add fault details or set your own seller price in Listing.')
+    return jsonify(applied)
 
 @app.post('/api/items/<item_id>/research/schedule')
 def research_schedule(item_id):
@@ -278,7 +295,7 @@ def validate_item(d):
         if d['condition'] not in pricing.CONDITION: raise Invalid('Unsupported condition.')
         out['condition']=d['condition']
     if 'specs' in d:
-        if not isinstance(d['specs'],dict) or len(d['specs'])>20: raise Invalid('Specifications must be an object with at most 20 fields.')
+        if not isinstance(d['specs'],dict) or len(d['specs'])>30: raise Invalid('Specifications must be an object with at most 30 fields.')
         out['specs']={str(k)[:50]:str(v)[:250] for k,v in d['specs'].items()}
     return out
 

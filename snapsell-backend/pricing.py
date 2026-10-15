@@ -8,8 +8,9 @@ from urllib.parse import urlsplit,urlunsplit
 import numpy as np
 import store
 import markets
+import faults
 
-CONDITION = {'Not verified':None,'Like new':None,'Excellent':None,'Good':None,'Fair':None,'Refurbished':None}
+CONDITION = {'Not verified':None,'For parts / not working':None,'Damaged / faulty':None,'Like new':None,'Excellent':None,'Good':None,'Fair':None,'Refurbished':None}
 
 def key(text):
     return re.sub(r'[\W_]+','-',text.casefold(),flags=re.UNICODE).strip('-')
@@ -48,9 +49,12 @@ def comparables(item,market='US',mode='exact',basis='item'):
                 row['age_days']=(datetime.now(timezone.utc)-stamp).total_seconds()/86400
                 if not 0<=row['age_days']<=7:reason=reason or 'Source observation is expired or has a future timestamp.'
             except (ValueError,KeyError,TypeError):reason=reason or 'Verification date is missing or invalid.'
-        if row.get('comparison_differences'):reason=reason or 'Source colour differs; reference only.'
         condition=row.get('condition','Unknown')
-        if (item['condition']=='Refurbished')!=(condition=='Refurbished'):reason=reason or 'Refurbished retail and used inventory are separate condition classes.'
+        source_faulty=condition in ['For parts / not working','Damaged / faulty'] or faults.source(row.get('title',''),str(row.get('evidence',{}).get('description',row.get('evidence',{}).get('description_quote',''))))['faulty']
+        if faults.profile(item)['faulty']!=source_faulty:reason=reason or 'Working and faulty units are separate price comparisons.'
+        if faults.profile(item)['faulty'] and not faults.match(item,row.get('title',''),str(row.get('evidence',{}).get('description',row.get('evidence',{}).get('description_quote',''))))[0]:reason=reason or 'The disclosed fault type is not confirmed on the source offer.'
+        if not faults.profile(item)['faulty'] and (item['condition']=='Refurbished')!=(condition=='Refurbished'):reason=reason or 'Refurbished retail and used inventory are separate condition classes.'
+        if row.get('comparison_differences'):reason=reason or 'Source colour differs; reference only.'
         if condition in ['Unknown','New']:reason=reason or 'Comparable pre-owned condition is not confirmed.'
         if row.get('kind')=='sold' and not row.get('transaction_verified'):reason=reason or 'Completed transaction value is not independently confirmed.'
         elif row.get('kind')=='sold':reason=reason or 'Completed transaction prices are separate from current asking-price comparisons.'
@@ -90,7 +94,9 @@ def comparables(item,market='US',mode='exact',basis='item'):
         result['reference_band']={'low':min(condition_references),'median':float(np.median(condition_references)),'high':max(condition_references),'count':len(condition_references),'label':'Other-condition offers; not a direct valuation of this item.'}
     import assessment
     result['preliminary']=assessment.reference(item,result)
-    if item.get('category')=='Phone' and (assessment.uncertainties(item) or (result['preliminary'] and result['preliminary']['suggested_price'] is None)):
+    fault_profile=faults.profile(item)
+    result['assessment']={'fault_profile':fault_profile,'message':'Describe the current fault or choose its type; research now searches damaged whole items.' if fault_profile['faulty'] and not fault_profile['types'] else 'Research compares the same disclosed fault type; working-device offers are excluded.' if fault_profile['faulty'] else 'Current operation is separate from repair history. Unknown battery health limits confidence, not whether the item can be listed.'}
+    if item.get('category')=='Phone' and (any(k in assessment.uncertainties(item) for k in ['storage','working']) or (result['preliminary'] and result['preliminary']['suggested_price'] is None)):
         result['basis']='Complete the key phone checks before setting a single price. Current checked offers remain visible as references.'
         return result
     if len(selected)<3 or len(pages)<3 or (verified and len(sellers)<2):return result

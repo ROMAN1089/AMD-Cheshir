@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 import amd
 import store
 import merchant
+import faults
 import markets
 import browse
 
@@ -158,10 +159,15 @@ def model_match(item,name,description=''):
     context=norm(name+' '+description)
     brand=item.get('brand','')
     if not unknown(brand) and not set(norm(brand).split()).issubset(set(context.split())):return False,'The recorded brand is not confirmed.'
-    forbidden=r'\b(for parts|not working|broken|damaged|cracked|defective|for repair|non functional|empty box|lot of [2-9]|set of [2-9]|bundle of [2-9])\b'
-    if any(t in str(name).casefold() for t in ['на запчасти','не работает','ジャンク','故障','坏了']):return False,'Broken products are not comparable.'
-    if re.search(forbidden,norm(name)) or (item.get('category') not in ['Accessory','Parts'] and re.search(r'\b(screen protector|replacement screen|charger only|power adapter only)\b',norm(name))):
-        return False,'Parts, accessories or non-working products are not comparable.'
+    # Whole faulty units are sellable; components and repair services are not whole-unit comparables.
+    component=r'\b(screen protector|replacement screen|replacement battery|charger only|power adapter only|screen replacement|repair service|mail in|empty box|lot of [2-9]|set of [2-9]|bundle of [2-9])\b'
+    whole_needs_repair=bool(re.search(r'\b(needs|replacement needed|whole phone|whole handset|complete phone|phone with)\b',norm(name)))
+    service=bool(re.search(r'\b(repair service|mail in|repair kit)\b',norm(name)))
+    if item.get('category') not in ['Accessory','Parts'] and (service or (not whole_needs_repair and (re.search(component,norm(name)) or re.search(r'^(?:for\s+)?(?:apple\s+)?iphone.+\b(?:screen|battery|charging port) (?:replacement|repair)\b',norm(name))))):
+        return False,'A component, service or multi-unit bundle is not a whole-item offer.'
+    if not item.get('_discover_only'):
+        ok,reason=faults.match(item,name,description)
+        if not ok:return False,reason
     specs=item.get('specs',{})
     if item.get('category') in ['Laptop','Computer','Phone','Tablet']:
         processor=specs.get('processor','')
@@ -195,6 +201,7 @@ def model_match(item,name,description=''):
     return True,('Similar product title and recorded attributes matched; exact identity is not confirmed.' if item.get('_research_mode')=='similar' else 'Exact model, brand and recorded product attributes found in the product evidence.')
 
 def condition_from(value,name):
+    if faults.source(name,str(value))['faulty'] or 'damagedcondition' in str(value).lower():return 'Damaged / faulty'
     schema=str(value).lower()
     if 'newcondition' in schema and 'likenew' not in schema: return 'New'
     if 'refurbishedcondition' in schema: return 'Refurbished'
@@ -332,7 +339,7 @@ def product_links(document,item):
         if any(token in urlparse(href).path for token in ['starter-pack','connected-pack','bundle','accessories']):continue
         href=urlunparse(urlparse(href)._replace(query='',fragment=''))
         name=a.get_text(' ',strip=True)+' '+urlparse(href).path.replace('-',' ')
-        candidate={**item,'specs':{},'_colour_reference':True}
+        candidate={**item,'specs':{},'_colour_reference':True,'_discover_only':True}
         if not model_match(candidate,name,item.get('brand',''))[0]:continue
         try:url=canonical(href)
         except EvidenceError:continue
@@ -369,9 +376,12 @@ def plan(item):
     broad=f'{base} {market["country_terms"]}'
     if broad not in queries: queries.append(broad)
     identity=' '.join(str(item.get(k,'')) for k in ['brand','model_key']).replace('-',' ')
-    if market['code']=='US' and item.get('category')=='Phone':
+    if market['code']=='US' and item.get('category')=='Phone' and not faults.profile(item)['faulty']:
         targeted=[f'{identity} {capacity} refurbished inurl:products (site:plug.tech OR site:loop-mobile.com)',f'{identity} {capacity} used unlocked buy product USD']
         queries=targeted+queries
+    if faults.profile(item)['faulty']:
+        defect=faults.terms(item,market['code'])
+        queries=[f'{identity} {capacity} {defect} {market["currency"]}',f'{identity} {capacity} {defect} site:paymore.com',f'{identity} {capacity} {defect} whole device buy {market["name"]}']+queries
     return list(dict.fromkeys(queries))[:6],model
 
 def discover(queries,exclude_hosts=None,limit=15,market='US'):
@@ -423,6 +433,9 @@ def refine(item,sources):
             response,model=amd.json_response('chat',f'You improve failed {market["name"]} resale price research for any product category. Return JSON {{"queries":["search phrase 1","search phrase 2"]}}. Preserve exact product identity and category-specific attributes. Seek independent appropriate local resale merchants and actual purchasable product pages, not price guides or category pages. Exclude blocked hosts. Do not bypass restrictions. Do not invent numbers, specifications or URLs.',json.dumps({'item':{k:item.get(k) for k in ['title','category','model_key','specs']},'blocked_hosts':blocked,'rejections':[{'host':urlparse(s['url']).hostname,'reason':s.get('reason','')} for s in sources[:12]]}),1100)
             queries.extend(q[:300] for q in response.get('queries',[]) if isinstance(q,str) and len(q)>8)
         except RuntimeError:pass
+    if faults.profile(item)['faulty']:
+        identity=' '.join(str(item.get(k,'')) for k in ['brand','model_key']).replace('-',' ')
+        queries=[f'{identity} {capacity} {faults.terms(item,market["code"])} {market["currency"]} for sale whole phone',f'{identity} {capacity} {faults.terms(item,market["code"])} item product']+queries
     return queries[:4],blocked,model
 
 def inspect_batch(urls,item,job,sources,observations,budget=85):
@@ -461,7 +474,7 @@ def run(job_id):
         job.update(stage='Searching public web sources',queries=queries,planning_model=model); store.put('jobs',job)
         urls,notes=discover(queries,market=job.get('market','US'))
         # Public catalogues are a fallback discovery path, never a source of numeric prices.
-        if item.get('category')=='Phone' and job.get('market','US')=='US' and 'iphone' in norm(item.get('model_key','')):
+        if not faults.profile(item)['faulty'] and item.get('category')=='Phone' and job.get('market','US')=='US' and 'iphone' in norm(item.get('model_key','')):
             urls=['https://www.plug.tech/collections/apple-iphones','https://loop-mobile.com/collections/refurbished-iphones']+urls
         for url in job.get('source_urls',[]):
             u=canonical(url)
@@ -486,7 +499,7 @@ def run(job_id):
             retry_queries,blocked,retry_model=refine(item,sources)
             extra,warnings=discover(retry_queries,exclude_hosts=blocked,limit=12,market=job.get('market','US'))
             extra=[u for u in extra if u not in {s['url'] for s in sources}]
-            job.update(retry_queries=retry_queries,refinement_model=retry_model,stage='Checking additional merchants',candidate_count=len(urls)+len(extra),warnings=job.get('warnings',[])+warnings);store.put('jobs',job)
+            job.update(retry_queries=retry_queries,refinement_model=retry_model,stage='Checking additional merchants',candidate_count=len(sources)+len(extra),warnings=job.get('warnings',[])+warnings);store.put('jobs',job)
             inspect_batch(extra,item,job,sources,observations,budget=65)
         if fingerprint(store.get('items',item['id']) or {})!=job.get('item_fingerprint'):
             job.update(status='superseded',stage='Item changed',message='The saved model or specifications changed during research. This run was not applied.'); store.put('jobs',job); return
@@ -512,7 +525,9 @@ def run(job_id):
             except RuntimeError: pass
         if job.get('fill_draft_price'):
             import assessment
-            assessment.apply_draft_price(item['id'],job)
+            applied=assessment.apply_draft_price(item['id'],job)
+            job['price_application']={'applied':bool(applied),'message':'Draft asking price filled from checked offers.' if applied else 'Price was not applied. See the item checks and matching-condition evidence; you can still set a seller price manually.'}
+            job['message']+=' '+job['price_application']['message']
         store.put('jobs',job)
     except (EvidenceError,ValueError) as exc:
         job.update(status='failed',stage='Research needs attention',message=str(exc)); store.put('jobs',job)

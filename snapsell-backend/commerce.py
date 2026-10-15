@@ -23,6 +23,8 @@ def recommend(item,budget=None):
     return sorted(result,key=lambda r:r['score'],reverse=True)[:3]
 
 def public_item(item):
+    import faults
+    if faults.profile(item)['faulty']:item={**item,'condition':'For parts / not working' if item.get('specs',{}).get('working')=='No' else 'Damaged / disclosed faults'}
     return {k:v for k,v in item.items() if k in {'id','title','brand','category','condition','specs','subtitle','description','image','price','status','use_case','source'}}
 
 def offline_intents(message):

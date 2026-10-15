@@ -249,6 +249,8 @@ def payloads(item,data):
     config={**status()['settings'],**data}
     for field in ['merchantLocationKey','fulfillmentPolicyId','paymentPolicyId','returnPolicyId','categoryId','condition']:
         if not config.get(field):raise ValueError('Missing eBay field: '+field)
+    import faults
+    if (item.get('specs',{}).get('working')=='No' or item.get('condition')=='For parts / not working') and item.get('category') in ['Phone','Laptop','Tablet','Computer','Monitor','Audio','Camera','Gaming','Electronics','Appliance'] and config['condition']!='FOR_PARTS_OR_NOT_WORKING':raise ValueError('This unit has current faults. Choose For parts or not working for the eBay listing.')
     if config['condition'] not in CONDITIONS:raise ValueError('Choose a supported eBay condition enumeration.')
     metadata=category_metadata(config['categoryId'])
     condition=next((c for c in metadata['conditions'] if str(c.get('conditionId'))==str(CONDITIONS[config['condition']])),None)
