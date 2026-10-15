@@ -156,3 +156,10 @@ def test_whole_phone_needing_repair_is_not_rejected_as_a_service(item):
  unit=phone(item)
  assert research.model_match(unit,'Apple iPhone 16 256GB Unlocked needs screen replacement','Whole phone, cracked screen')[0]
  assert not research.model_match(unit,'Apple iPhone 16 256GB Unlocked cracked screen mail in repair service')[0]
+
+
+def test_ai_does_not_repeat_core_questions_under_aliases(item):
+ unit=phone(item)
+ rows=[{'key':'fault_description','label':'Describe the current fault'}, {'key':'accessories_included','label':'What accessories are included?'}, {'key':'repair_history','label':'Has it ever been repaired?'}, {'key':'model_variant','label':'Which exact iPhone 16 variant is this?'}, {'key':'face_id_status','label':'Does Face ID work?','options':['Yes','No']}]
+ result=assessment_questions.set_assessment_questions(unit,{'questions':rows})
+ assert [r['key'] for r in result]==['face_id_status']
