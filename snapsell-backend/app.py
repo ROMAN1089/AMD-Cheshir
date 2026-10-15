@@ -33,6 +33,7 @@ import deals
 import google_calendar
 import channels
 import ebay
+import ebay_notifications
 from catalog import CATEGORIES
 
 app=Flask(__name__)
@@ -332,7 +333,7 @@ def publish(item_id):
 def channels_workspace():return jsonify(channels.workspace())
 
 @app.get('/api/ebay')
-def ebay_connection():return jsonify(ebay.status())
+def ebay_connection():return jsonify({**ebay.status(),'notifications':ebay_notifications.status()})
 
 @app.post('/api/ebay/connect')
 def ebay_connect():
@@ -608,4 +609,5 @@ if __name__=='__main__':
     ebay.start_worker()
     research.start_worker()
     google_calendar.start_worker()
+    ebay_notifications.start_worker()
     serve(app,host=os.getenv('HOST','127.0.0.1'),port=int(os.getenv('PORT','5000')),threads=6)

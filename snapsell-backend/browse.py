@@ -33,8 +33,10 @@ def request(path,params=None):
 
 def collect(item):
     import research,faults
+    import ebay_notifications
     rows=[];sources=[]
     try:
+        if not ebay_notifications.sync():raise RuntimeError('eBay notification inbox must sync before price research can continue.')
         condition_filter='conditionIds:{7000}' if item.get('specs',{}).get('working')=='No' else 'conditions:{USED}'
         query=item['title']+' '+str(item.get('specs',{}).get('storage',''))+' '+faults.terms(item,'US')
         result=request('/item_summary/search',{'q':query.strip(),'limit':10,'filter':'priceCurrency:USD,itemLocationCountry:US,buyingOptions:{FIXED_PRICE},'+condition_filter})
@@ -52,6 +54,7 @@ def collect(item):
             except (ValueError,TypeError):continue
             username=details.get('seller',{}).get('username')
             if price.get('currency')!='USD' or value<=0 or not username:continue
+            if not ebay_notifications.allowed_seller(username):continue
             proof={k:details.get(k) for k in ['itemId','title','price','condition','localizedAspects','itemLocation','estimatedAvailabilities','shippingOptions']}
             proof['description']=description[:3000]
             row=dict(title=name,model_key=item['model_key'],price=value,currency='USD',market='US',match_level=item.get('_research_mode','exact'),kind='asking',condition=condition,source='verified_api',source_name='eBay',seller_id='ebay:'+username,url=research.canonical(url),observed_at=store.now(),age_days=0,page_sha256=hashlib.sha256(json.dumps(proof,sort_keys=True).encode()).hexdigest(),evidence=proof,verification='Official eBay Browse getItem response',availability='InStock',match_reason=reason,transaction_verified=False,shipping='Delivery and taxes not verified')

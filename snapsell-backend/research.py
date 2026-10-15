@@ -28,6 +28,7 @@ import merchant
 import faults
 import markets
 import browse
+import ebay_notifications
 
 executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='market-research')
 USER_AGENT='SnapSellResearch/1.0 (product price verification; no login or bot bypass)'
@@ -462,6 +463,7 @@ def latest(item_id,market='US',mode='exact'):
 def fingerprint(item):
     return hashlib.sha256(json.dumps({k:item.get(k) for k in ['model_key','brand','category','title','specs','condition']},sort_keys=True).encode()).hexdigest()
 
+@ebay_notifications.serialized
 def run(job_id):
     job=store.get('jobs',job_id)
     try:
