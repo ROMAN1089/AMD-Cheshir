@@ -3,6 +3,7 @@ import json
 import re
 from urllib.parse import urlparse,urlunparse,urlencode,parse_qsl
 from bs4 import BeautifulSoup
+import markets
 
 def shopify_evidence(document,item,fetch,allowed,match,condition_from):
     """Use Shopify's documented public Product Ajax response to resolve variants.
@@ -11,6 +12,8 @@ def shopify_evidence(document,item,fetch,allowed,match,condition_from):
     merchant page. A merchant page's conflicting condition metadata remains visible.
     """
     p=urlparse(document['url']); path=p.path
+    market=markets.for_item(item)
+    if market['code']!='US' and not any((p.hostname or '').endswith(suffix) for suffix in market['suffixes']):return [],['Shopify source country is not established for the selected market.']
     if '/products/' not in path: return [],[]
     soup=BeautifulSoup(document['text'],'html.parser')
     if 'cdn.shopify.com' not in document['text'] and 'Shopify.' not in document['text']: return [],[]
@@ -19,7 +22,7 @@ def shopify_evidence(document,item,fetch,allowed,match,condition_from):
     if not currency:
         m=re.search(r'Shopify\.currency\s*=\s*\{[^}]*["\']active["\']\s*:\s*["\']([A-Z]{3})',document['text'])
         currency=m.group(1) if m else None
-    if currency!='USD': return [],['The merchant does not explicitly establish USD presentment currency.']
+    if currency!=market['currency']: return [],['The merchant does not explicitly establish '+market['currency']+' presentment currency.']
     product_path=path[:path.find('/products/')]+path[path.find('/products/'):].rstrip('/')
     api_url=urlunparse(('https',p.netloc,product_path+'.js','','',''))
     allowed(api_url)
@@ -38,12 +41,12 @@ def shopify_evidence(document,item,fetch,allowed,match,condition_from):
         if v.get('available') is not True:continue
         try:amount=int(v['price'])/100
         except (ValueError,TypeError,KeyError):continue
-        if not 1<=amount<=100000:continue
+        if not 0<amount<=1_000_000_000:continue
         title=name+' · '+str(v.get('title','Default'))
         # Never convert RAM/storage from another variant into this variant's facts.
         if not match(item,title,description)[0]:continue
         offer_query=[(k,val) for k,val in parse_qsl(p.query) if k!='variant']+[('variant',str(v.get('id','')))]
         offer_url=urlunparse((p.scheme,p.netloc,p.path,p.params,urlencode(offer_query),''))
-        rows.append(dict(title=title[:250],price=amount,currency='USD',condition=condition,kind='asking',source='verified_web',verification='Public Shopify Product Ajax variant; page currency and product description cross-checked',url=document['url'],offer_url=offer_url,source_name=p.hostname,observed_at=response['fetched_at'],age_days=0,page_sha256=document['sha256'],api_sha256=response['sha256'],evidence={'product_title':name,'description_quote':description[:1600],'variant_title':v.get('title'),'variant_id':v.get('id'),'variant_sku':v.get('sku'),'price_minor_units':v['price'],'priceCurrency':currency,'available':v['available'],'product_api_url':api_url,'condition_basis':'Primary product title/description; cosmetic grade retained without numerical adjustment','metadata_conflict':'The page description says refurbished; a JSON-LD template also contains NewCondition.' if conflict else None},match_reason=reason,availability='InStock',model_key=item['model_key'],shipping='Shipping and taxes not verified',transaction_verified=False,source_grade=str(v.get('title',''))))
+        rows.append(dict(title=title[:250],price=amount,currency=currency,market=market['code'],match_level=item.get('_research_mode','exact'),condition=condition,kind='asking',source='verified_web',verification='Public Shopify Product Ajax variant; page currency and product description cross-checked',url=document['url'],offer_url=offer_url,source_name=p.hostname,observed_at=response['fetched_at'],age_days=0,page_sha256=document['sha256'],api_sha256=response['sha256'],evidence={'product_title':name,'description_quote':description[:1600],'variant_title':v.get('title'),'variant_id':v.get('id'),'variant_sku':v.get('sku'),'price_minor_units':v['price'],'priceCurrency':currency,'available':v['available'],'product_api_url':api_url,'condition_basis':'Primary product title/description; cosmetic grade retained without numerical adjustment','metadata_conflict':'The page description says refurbished; a JSON-LD template also contains NewCondition.' if conflict else None},match_reason=reason,availability='InStock',model_key=item['model_key'],shipping='Shipping and taxes not verified',transaction_verified=False,source_grade=str(v.get('title',''))))
     # Multiple grades are independent offers but not independent merchants.
     return rows,[] if rows else ['The public product response has no matching available variants.']

@@ -42,7 +42,7 @@ def prepare(item,name):
   path=(store.DATA/'media'/image.removeprefix('/media/')).resolve()
   if path.is_relative_to((store.DATA/'media').resolve()) and path.is_file():photo=path
  missing=[]
- if item['status']=='sold':missing.append('This item has sold; do not post another listing.')
+ if item['status'] in ['sold','sale_pending']:missing.append('This item has sold or has an eBay sale awaiting confirmation; do not post another listing.')
  if not item.get('confirmed'):missing.append('Review and confirm product facts.')
  if price is None:missing.append('Choose a price or gather enough matching market evidence.')
  elif price<max(item['reserve'],item['cost']/(1-item['fee_rate'])):missing.append('The asking price is below your recorded minimum or fee-adjusted acquisition cost.')
@@ -67,24 +67,43 @@ def bundle(item,name):
 def tracked(item_id,name):
  return [a for a in store.all_rows('actions') if a.get('type')=='external_listing' and a.get('item_id')==item_id and a.get('platform')==name]
 
+def reconcile_item(item_id):
+ item=store.get('items',item_id)
+ if not item or item['status'] in ['sold','sale_pending']:return
+ active=any(a.get('type')=='external_listing' and a.get('item_id')==item_id and a.get('status')=='posted' for a in store.all_rows('actions'))
+ item['status']='listed' if active else 'draft'
+ store.put('items',item)
+
 def record_listing(item,name,url):
  destination=platform(name);p=urlsplit(url)
  if p.scheme!='https' or p.username or p.password or (p.port and p.port!=443) or not any(p.hostname==h or (p.hostname or '').endswith('.'+h) for h in destination['hosts']):raise ValueError('Use an HTTPS listing URL from the selected marketplace.')
  patterns={'ebay':r'^/itm/(?:[^/]+/)?\d+(?:/|$)','facebook':r'^/marketplace/item/\d+(?:/|$)','craigslist':r'/\d+\.html$'}
  if not re.search(patterns[name],p.path):raise ValueError('Use the actual item listing URL, not a marketplace homepage or profile.')
- if item['status']=='sold':raise ValueError('This item is already sold.')
+ if item['status'] in ['sold','sale_pending']:raise ValueError('This item is sold or has a sale awaiting confirmation.')
+ if not item.get('confirmed'):raise ValueError('Review the product facts before recording its listing.')
+ kit,_=prepare(item,name)
+ if kit['price_usd'] is not None and item['price']<=0:item['price']=kit['price_usd']
  existing=tracked(item['id'],name);row=existing[-1] if existing else {'id':str(uuid4()),'type':'external_listing','item_id':item['id'],'platform':name,'created_at':store.now()}
+ if row.get('source')=='ebay_api':raise ValueError('Manage the API-connected eBay listing using its sync and withdraw controls.')
  row.update(url=url[:2000],status='posted',source='seller_reported',listing_version=version(item),updated_at=store.now())
- return store.put('actions',row)
+ item['status']='listed'
+ with store.connection() as db:
+  db.execute('BEGIN IMMEDIATE')
+  current=json.loads(db.execute('SELECT body FROM items WHERE id=?',(item['id'],)).fetchone()['body'])
+  if current['status'] in ['sold','sale_pending']:raise ValueError('This item is sold or has a sale awaiting confirmation.')
+  db.execute('UPDATE items SET body=? WHERE id=?',(json.dumps(item),item['id']))
+  db.execute('INSERT INTO actions(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body',(row['id'],json.dumps(row)))
+ return row
 
 def complete_sale(item_id,listing_id,amount,fee,cost):
  with store.connection() as db:
   db.execute('BEGIN IMMEDIATE')
   row=db.execute('SELECT body FROM items WHERE id=?',(item_id,)).fetchone();item=json.loads(row['body']) if row else None
   row=db.execute('SELECT body FROM actions WHERE id=?',(listing_id,)).fetchone();listing=json.loads(row['body']) if row else None
-  if not item or item['status']=='sold' or not listing or listing.get('type')!='external_listing' or listing['item_id']!=item_id or listing.get('status')!='posted':raise ValueError('Record an active external listing before recording its completed sale.')
+  if not item or item['status']=='sold' or not listing or listing.get('type')!='external_listing' or listing['item_id']!=item_id or listing.get('status') not in ['posted','sale_detected']:raise ValueError('Record an active external listing or detected eBay sale before recording its completed sale.')
   economics={'cost':cost,'fee_amount':fee,'net_contribution':round(amount-fee-cost,2)}
   order={'id':str(uuid4()),'item_id':item_id,'status':'completed','amount':amount,'platform':listing['platform'],'listing_url':listing['url'],'source':'seller_reported','economics':economics,'completed_at':store.now()}
+  if listing.get('environment'):order['environment']=listing['environment']
   item.update(status='sold',sold_price=amount,sold_at=store.now());listing.update(status='sold',sold_at=store.now())
   db.execute('UPDATE items SET body=? WHERE id=?',(json.dumps(item),item_id));db.execute('UPDATE actions SET body=? WHERE id=?',(json.dumps(listing),listing_id))
   # Other copies require removal on the external site. Do not pretend they were ended.
@@ -93,19 +112,28 @@ def complete_sale(item_id,listing_id,amount,fee,cost):
    if value.get('type')=='external_listing' and value.get('item_id')==item_id and value['id']!=listing_id and value.get('status')=='posted':
     value.update(status='needs_removal');db.execute('UPDATE actions SET body=? WHERE id=?',(json.dumps(value),value['id']))
   db.execute('INSERT INTO orders(id,body) VALUES(?,?)',(order['id'],json.dumps(order)))
+  import outcomes
+  outcomes.record_sale(db,item,order)
+  db.execute('INSERT INTO events VALUES(?,?,?,?,?,?)',(str(uuid4()),item_id,'sale','seller_reported',store.now(),json.dumps({'amount':amount,'order_id':order['id'],'platform':listing['platform']})))
  return order
 
 def workspace():
  listings=[a for a in store.all_rows('actions') if a.get('type')=='external_listing']
+ for listing in listings:
+  item=store.get('items',listing['item_id'])
+  listing['needs_sync']=bool(item and listing.get('status')=='posted' and (listing.get('listing_version')!=version(item) or listing.get('last_sync_failed')))
  sales=[o for o in store.all_rows('orders') if o.get('source')=='seller_reported' and o.get('platform') in PLATFORMS]
  return {'platforms':[{'id':name,**value} for name,value in PLATFORMS.items()],'listings':listings,'sales':sales,'revenue':round(sum(o['amount'] for o in sales),2),'net_contribution':round(sum(o['economics']['net_contribution'] for o in sales),2),'note':'External links and completed sales are seller-reported. Marketplace activity is not automatically synchronized.'}
 
 def draft_reply(item,message,name):
  platform(name)
- if item['status']=='sold':return {'answer':'This item has sold. Thank you for your interest.','provider':'Recorded inventory','intents':['availability']}
+ if item['status']=='sold':return {'answer':'This item has sold. Thank you for your interest.','provider':'Recorded inventory','intents':['availability'],'mode':'draft_only','sent':False,'platform':name}
+ if item['status']=='sale_pending':return {'answer':'A sale has been reported for this item and is awaiting seller confirmation. Please do not make another offer yet.','provider':'eBay inventory status','intents':['availability'],'mode':'draft_only','sent':False,'platform':name}
  posted=any(a.get('status')=='posted' for a in tracked(item['id'],name))
- result=commerce.reply({**item,'status':'listed'},message)
+ kit,_=prepare(item,name)
+ result=commerce.reply({**item,'status':'listed','price':kit['price_usd'] or 0},message)
  result['answer']=result['answer'].replace('Use Make an offer to send a price to the seller.','Please send your proposed price in this conversation.').replace('Suggested items appear below when compatibility is recorded.','I can check compatible items from the seller’s inventory.')
  if not posted and 'availability' in result['intents']:result['answer']='Availability needs seller confirmation before sending this reply.'
  result.update(mode='draft_only',sent=False,platform=name)
+ store.put('actions',{'type':'reply_draft','item_id':item['id'],'platform':name,'question':amd.redact(message),'answer':result['answer'],'intents':result['intents'],'source':'seller_reported','at':store.now()})
  return result

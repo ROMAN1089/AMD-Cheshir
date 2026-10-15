@@ -123,5 +123,5 @@ def confirm(item_id,candidate_id):
     if item['status']=='sold' or research.fingerprint(item)!=job.get('result_fingerprint'):raise ValueError('The listing changed. Run product lookup again.')
     candidate=next((c for c in job.get('candidates',[]) if c['id']==candidate_id),None)
     if not candidate:raise ValueError('Choose a source-backed candidate from this lookup.')
-    item.update(title=clean_title(candidate['title']),model_key=candidate['model_key'],category=candidate['category'],brand='Unknown',identity_confirmation={'candidate_url':candidate['url'],'source_title':candidate['title'],'confirmed_by':'seller','at':store.now()})
+    item.update(title=clean_title(candidate['title']),model_key=candidate['model_key'],category=candidate['category'],brand='Unknown',confirmed=False,identity_confirmation={'candidate_url':candidate['url'],'source_title':candidate['title'],'confirmed_by':'seller','at':store.now()})
     store.put('items',item);research.start(item_id,[candidate['url']]);return item

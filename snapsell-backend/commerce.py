@@ -32,7 +32,7 @@ def offline_intents(message):
         if any(word in m for word in words): intents.append(kind)
     return intents or ['other']
 
-def reply(item,message):
+def reply(item,message,allow_unconfirmed=False):
     provider='Local fact-based assistant'; intents=offline_intents(message); warning=None
     if amd.configured():
         try:
@@ -44,8 +44,10 @@ def reply(item,message):
     answers=[]; specs=item.get('specs',{})
     if item['status']!='listed':
         return dict(answer='This item is no longer available. Please choose another item from the store.',provider=provider,recommendations=[],intents=['availability'])
+    if not item.get('confirmed') and not allow_unconfirmed:
+        return dict(answer='Product facts need seller review before I can answer reliably. Please ask the seller to confirm the details.',provider=provider,recommendations=[],intents=intents)
     for intent in intents:
-        if intent=='availability': answers.append(f'Yes, the {item["title"]} is available at ${item["price"]:,.0f}.')
+        if intent=='availability': answers.append(f'Yes, the {item["title"]} is available.'+(f' The asking price is ${item["price"]:,.2f}.' if item['price']>0 else ' The asking price needs seller confirmation.'))
         elif intent=='battery': answers.append('Battery: '+str(specs.get('battery','Not verified. The seller needs to check this.'))+'.')
         elif intent=='included': answers.append('The seller lists: '+str(specs.get('included','Included accessories have not been verified.'))+'.')
         elif intent=='specs': answers.append('Seller-confirmed specifications: '+ '; '.join(f'{k.replace("_"," ")}: {v}' for k,v in specs.items() if k not in ['included','battery'])+'.')
@@ -54,7 +56,7 @@ def reply(item,message):
         elif intent=='offer': answers.append('Use Make an offer to send a price to the seller. A discount or sale requires seller approval.')
         elif intent=='bundle': answers.append('I checked the available catalog for a complementary item with a matching display connection. Suggested items appear below when compatibility is recorded.')
         elif intent=='warranty': answers.append('No warranty or return policy is recorded. Please ask the seller before purchasing.')
-        elif intent=='other': answers.append(f'The {item["title"]} is listed at ${item["price"]:,.0f}. I can help with specifications, condition, accessories, or an offer. Unrecorded details require the seller to check.')
+        elif intent=='other': answers.append(f'The {item["title"]}'+(f' is listed at ${item["price"]:,.2f}.' if item['price']>0 else ' needs a confirmed asking price.')+' I can help with specifications, condition, accessories, or an offer. Unrecorded details require the seller to check.')
     return dict(answer=' '.join(dict.fromkeys(answers)),provider=provider,warning=warning,recommendations=recommend(item) if 'bundle' in intents else [],intents=intents)
 
 def counts(item_id,source=None):
@@ -65,6 +67,9 @@ def actions():
     for item in store.all_rows('items'):
         if item['status']!='listed': continue
         e=store.events(item['id']); stats=counts(item['id']); questions=Counter()
+        external_questions=[a for a in store.all_rows('actions') if a.get('type')=='reply_draft' and a.get('item_id')==item['id']]
+        for question in external_questions:
+            for intent in question.get('intents',[]):questions[intent]+=1
         for event in e:
             if event['kind']=='inquiry':
                 for intent in offline_intents(event['body'].get('question','')):
@@ -72,7 +77,7 @@ def actions():
         recorded={a.get('id') for a in store.all_rows('actions') if a.get('type')=='applied'}
         if questions['included']>=3 and 'Includes:' not in item['description'] and item.get('specs',{}).get('included'):
             action_id=f'faq-{item["id"]}'
-            if action_id not in recorded: result.append(dict(id=action_id,item_id=item['id'],kind='description',title='Answer the question buyers keep asking',detail=f'{questions["included"]} accessory questions. Add the verified included accessories to the listing.',evidence_source='live' if any(x['source']=='live' for x in e if x['kind']=='inquiry') else 'synthetic',priority=1,item_title=item['title']))
+            if action_id not in recorded: result.append(dict(id=action_id,item_id=item['id'],kind='description',title='Answer the question buyers keep asking',detail=f'{questions["included"]} recorded accessory questions. Update the local description, then synchronize or manually revise your marketplace listings.',evidence_source='seller_reported' if external_questions else 'live',priority=1,item_title=item['title']))
         if item.get('age_days',0)>=21:
             analysis=pricing.evaluate(item)
             best=next((s for s in analysis['strategies'] if s['id']=='balanced'),None)
@@ -89,4 +94,5 @@ def analytics():
     def funnel(events):
         c=Counter(e['kind'] for e in events)
         return dict(views=c['view'],inquiries=c['inquiry'],offers=c['offer'],sales=c['sale'])
-    return dict(revenue=round(revenue,2),net_contribution=round(contribution,2),inventory_value=round(sum(i['price'] for i in items if i['status']=='listed'),2),active_count=sum(i['status']=='listed' for i in items),draft_count=sum(i['status']=='draft' for i in items),live=funnel(live),synthetic=funnel(demo),items=[dict(id=i['id'],title=i['title'],status=i['status'],price=i['price'],age_days=i.get('age_days',0),live=dict(counts(i['id'],'live')),synthetic=dict(counts(i['id'],'synthetic'))) for i in items],note='Net contribution deducts recorded acquisition cost and marketplace fee; it excludes taxes, labor, shipping and refunds. Sales are seller-confirmed deals; no payment is processed.')
+    external=[a for a in store.all_rows('actions') if a.get('type')=='reply_draft']
+    return dict(revenue=round(revenue,2),net_contribution=round(contribution,2),inventory_value=round(sum(i['price'] for i in items if i['status']=='listed'),2),active_count=sum(i['status']=='listed' for i in items),draft_count=sum(i['status']=='draft' for i in items),recorded_questions=len(external)+len([e for e in live if e['kind']=='inquiry']),completed_sales=len(orders),live=funnel(live),external=funnel([e for e in ev if e['source']=='seller_reported']),synthetic=funnel(demo),items=[dict(id=i['id'],title=i['title'],status=i['status'],price=i['price'],age_days=i.get('age_days',0),live=dict(counts(i['id'],'live')),synthetic=dict(counts(i['id'],'synthetic'))) for i in items],note='Net contribution deducts recorded acquisition cost and marketplace fee; it excludes taxes, labor, shipping and refunds. Sales are seller-confirmed deals; no payment is processed.')

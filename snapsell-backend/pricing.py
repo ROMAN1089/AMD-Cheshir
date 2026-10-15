@@ -3,15 +3,16 @@ import hashlib
 import json
 import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlsplit,urlunsplit
 import numpy as np
 import store
+import markets
 
 CONDITION = {'Like new':None,'Excellent':None,'Good':None,'Fair':None,'Refurbished':None}
 
 def key(text):
-    return re.sub(r'[^a-z0-9]+','-',text.lower()).strip('-')
+    return re.sub(r'[\W_]+','-',text.casefold(),flags=re.UNICODE).strip('-')
 
 def completeness(item):
     specs=item.get('specs',{})
@@ -23,49 +24,80 @@ def quantile(values, weights, q):
     order=np.argsort(values); v=np.asarray(values)[order]; w=np.asarray(weights)[order]
     return float(np.interp(q,(np.cumsum(w)-.5*w)/sum(w),v))
 
-def comparables(item):
-    rows=[dict(r) for r in store.all_rows('comparables') if r.get('source')!='synthetic' and key(r['model_key'])==key(item['model_key']) and (r.get('item_id') in [None,item['id']])]
+def comparables(item,market='US',mode='exact',basis='item'):
+    currency=markets.get(market)['currency']
+    if mode not in ['exact','similar'] or basis not in ['item','delivered']:raise ValueError('Unsupported research matching mode or price basis.')
+    from research import fingerprint,unknown
+    rows=[dict(r) for r in store.all_rows('comparables') if r.get('source')!='synthetic' and key(r['model_key'])==key(item['model_key']) and r.get('item_id') in [None,item['id']]]
     selected=[]
-    for row in rows:
-        reason=None
-        if row['source']=='verified_web':
-            from research import fingerprint
-            if row.get('item_fingerprint')!=fingerprint(item): reason='The item model, configuration or condition changed. Run research again.'
-            if not row.get('page_sha256') or not row.get('evidence') or row.get('kind')!='asking': reason='Source-page verification is missing.'
-            try:
-                row['age_days']=max(0,(datetime.now(timezone.utc)-datetime.fromisoformat(row['observed_at'])).total_seconds()/86400)
-                if row['age_days']>7: reason='Web observation is older than seven days. Run research again.'
-            except (ValueError,KeyError): reason='Verification date is missing.'
-        c=row.get('condition','Unknown')
-        if (item['condition']=='Refurbished') != (c=='Refurbished'): reason=reason or 'Refurbished retail and used inventory are separate condition classes.'
-        if c in ['Unknown','New']: reason='Comparable pre-owned condition is not confirmed.'
-        if row.get('kind')=='sold' and not row.get('transaction_verified'): reason='Completed transaction value is not independently confirmed.'
-        row['included']=reason is None
-        row['exclusion_reason']=reason
-        if reason is None: selected.append(row)
-    sold=[r for r in selected if r['kind']=='sold']
-    if len(sold)>=3: selected=sold
-    def page_identity(row):
+    def page_id(row):
         if not row.get('url'):return row['id']
         p=urlsplit(row['url']);return urlunsplit((p.scheme.lower(),p.netloc.lower().removeprefix('www.'),p.path.rstrip('/'),'',''))
-    independent_pages=len({page_identity(r) for r in selected})
-    independent_merchants=len({str(r.get('source_name') or 'Seller import').lower().removeprefix('www.') for r in selected})
-    reference_rows=[r for r in rows if r.get('exclusion_reason')=='Refurbished retail and used inventory are separate condition classes.']
-    reference=None
-    if reference_rows:
-        reference={'low':min(r['price'] for r in reference_rows),'high':max(r['price'] for r in reference_rows),'count':len(reference_rows),'label':'Refurbished retail references; not a direct used-item valuation.'}
-    base=dict(rows=rows,available=False,source='verified_web' if any(r['source']=='verified_web' for r in rows) else 'imported',sample_count=len(selected),independent_pages=independent_pages,independent_merchants=independent_merchants,reference_band=reference,basis='At least three distinct product pages from two merchants are required for an automatic estimate. Individual verified offers remain available as evidence. No numeric condition adjustment is invented.')
-    if len(selected)<3 or independent_pages<3 or (any(r['source']=='verified_web' for r in selected) and independent_merchants<2): return base
-    # No condition multipliers: source condition is retained and different grades remain visible.
-    values=[r['price'] for r in selected]
-    domain_counts={r.get('source_name','Seller import'):sum(x.get('source_name','Seller import')==r.get('source_name','Seller import') for x in selected) for r in selected}
-    weights=[math.exp(-min(r.get('age_days',0),365)/45)/domain_counts[r.get('source_name','Seller import')] for r in selected]
-    median=float(np.median(values)); mad=float(np.median(np.abs(np.asarray(values)-median)))
-    keep=[i for i,v in enumerate(values) if mad==0 or abs(v-median)<=3.5*1.4826*mad]
-    values=[values[i] for i in keep]; weights=[weights[i] for i in keep]
-    effective=sum(weights)**2/sum(w*w for w in weights)
-    if len(values)<3: return {**base,'basis':'Fewer than three observations survived the outlier check. No price estimate is published.'}
-    return dict(available=True,median=round(quantile(values,weights,.5),2),low=round(quantile(values,weights,.25),2),high=round(quantile(values,weights,.75),2),sample_count=len(values),domain_count=len(domain_counts),independent_pages=independent_pages,independent_merchants=independent_merchants,reference_band=reference,effective_samples=round(effective,1),source=base['source'],kind='sold' if len(sold)>=3 else 'asking',confidence='Moderate' if effective>=8 and len(domain_counts)>=3 else 'Low',rows=rows,basis='Exact model and recorded capacity matching; source condition retained without numeric adjustment; per-merchant balancing; recency weights; MAD outlier filter; weighted median and interquartile range. Asking prices exclude unverified shipping and taxes. This is not a completed-sale valuation or a confidence interval.')
+    def seller(row):return row.get('seller_id') or str(row.get('source_name') or 'Seller import').casefold().removeprefix('www.')
+    for row in rows:
+        reason=None
+        if mode=='exact' and unknown(item.get('model_key')):reason='Confirm an exact model before using exact-model valuations.'
+        elif row.get('market','US')!=market or row.get('currency','USD')!=currency:reason='Different research market or currency.'
+        elif row.get('match_level','exact')!=mode:reason='Different product matching mode.'
+        elif row.get('source') in ['verified_web','verified_api']:
+            if row.get('item_fingerprint')!=fingerprint(item):reason='The item identity or specifications changed. Run research again.'
+            elif not row.get('evidence') or not row.get('page_sha256') or row.get('kind')!='asking':reason='Source verification is missing.'
+            try:
+                stamp=datetime.fromisoformat(row['observed_at'])
+                if stamp.tzinfo is None:raise ValueError('Timezone missing')
+                row['age_days']=(datetime.now(timezone.utc)-stamp).total_seconds()/86400
+                if not 0<=row['age_days']<=7:reason=reason or 'Source observation is expired or has a future timestamp.'
+            except (ValueError,KeyError,TypeError):reason=reason or 'Verification date is missing or invalid.'
+        condition=row.get('condition','Unknown')
+        if (item['condition']=='Refurbished')!=(condition=='Refurbished'):reason=reason or 'Refurbished retail and used inventory are separate condition classes.'
+        if condition in ['Unknown','New']:reason=reason or 'Comparable pre-owned condition is not confirmed.'
+        if row.get('kind')=='sold' and not row.get('transaction_verified'):reason=reason or 'Completed transaction value is not independently confirmed.'
+        elif row.get('kind')=='sold':reason=reason or 'Completed transaction prices are separate from current asking-price comparisons.'
+        try:
+            price=float(row['price'])
+            if not math.isfinite(price) or price<=0:raise ValueError('Invalid price')
+            if basis=='delivered':
+                shipping=float(row['shipping_amount'])
+                if row.get('shipping_currency')!=currency or not math.isfinite(shipping) or shipping<0:raise ValueError('Unverified shipping')
+                price+=shipping
+            row['comparison_price']=price
+        except (ValueError,TypeError,KeyError):reason=reason or 'Valid price and requested shipping evidence are missing.'
+        row.update(included=reason is None,exclusion_reason=reason)
+        if reason is None:selected.append(row)
+    # Count each source product page once, preferring the matching recorded grade.
+    independent={}
+    for row in sorted(selected,key=lambda r:(r.get('condition')==item['condition'],str(r.get('observed_at',''))),reverse=True):
+        identity=page_id(row)
+        if identity in independent:row.update(included=False,exclusion_reason='Duplicate product page or variant; not an independent observation.')
+        else:independent[identity]=row
+    selected=list(independent.values())
+    values=np.array([r['comparison_price'] for r in selected])
+    if len(values)>=3:
+        median=float(np.median(values));mad=float(np.median(np.abs(values-median)))
+        width=3.5*1.4826*mad if mad else max(1,median*.875)
+        retained=[]
+        for row in selected:
+            if abs(row['comparison_price']-median)>width:row.update(included=False,exclusion_reason='Price outside the robust observed range; excluded as an outlier.')
+            else:retained.append(row)
+        selected=retained
+    sellers={seller(r) for r in selected};pages={page_id(r) for r in selected}
+    verified=any(r.get('source') in ['verified_web','verified_api'] for r in selected)
+    market_info=markets.get(market)
+    result=dict(rows=rows,available=False,source='verified_api' if any(r.get('source')=='verified_api' for r in selected) else 'verified_web' if verified else 'imported',market=market,currency=currency,match_level=mode,price_basis=basis,sample_count=len(selected),independent_pages=len(pages),independent_merchants=len(sellers),reference_band=None,shipping_observations=sum(r.get('shipping_currency')==currency and r.get('shipping_amount') is not None for r in selected),basis='At least three independent offers and two sellers are needed for automatic web/API estimates. Asking prices are not completed sales. Taxes remain unverified.')
+    condition_references=[r['comparison_price'] for r in rows if r.get('exclusion_reason')=='Refurbished retail and used inventory are separate condition classes.' and r.get('comparison_price')]
+    if condition_references:
+        result['reference_band']={'low':min(condition_references),'median':float(np.median(condition_references)),'high':max(condition_references),'count':len(condition_references),'label':'Other-condition offers; not a direct valuation of this item.'}
+    if len(selected)<3 or len(pages)<3 or (verified and len(sellers)<2):return result
+    counts={name:sum(seller(r)==name for r in selected) for name in sellers}
+    weights=[math.exp(-min(r.get('age_days',0),365)/7)/counts[seller(r)] for r in selected]
+    values=[r['comparison_price'] for r in selected];effective=sum(weights)**2/sum(w*w for w in weights)
+    band=dict(low=round(quantile(values,weights,.25),2),median=round(quantile(values,weights,.5),2),high=round(quantile(values,weights,.75),2))
+    stamps=[datetime.fromisoformat(r['observed_at']) for r in selected if r.get('source') in ['verified_web','verified_api']]
+    result.update(**band,effective_samples=round(effective,1),domain_count=len(sellers),confidence='Moderate' if verified and effective>=8 and len(sellers)>=3 else 'Low',kind='asking',expires_at=(min(stamps)+timedelta(days=7)).isoformat() if stamps else None)
+    if mode=='similar':
+        result.update(reference_band={**band,'count':len(selected),'label':'Similar-product asking-price reference; exact model is unconfirmed.'},basis='Similar offers only. This is not an exact-model valuation and cannot set a listing price automatically.')
+    else:result['available']=True
+    return result
 
 def features(row):
     return [1,row['price_ratio']-1,row['age_days']/60,row['excellent'],row['monitor'],row['completeness']-.7]
@@ -74,7 +106,7 @@ _cache={}
 
 def fit_model():
     rows=store.all_rows('history')
-    real=[r for r in rows if r['source']!='synthetic']
+    real=[r for r in rows if r['source']!='synthetic' and r.get('market','US')=='US' and r.get('currency','USD')=='USD']
     using_real=len(real)>=120 and len({r['sold_within_7_days'] for r in real})==2
     if not using_real: return None
     candidates=real
@@ -86,6 +118,7 @@ def fit_model():
     candidates=sorted(candidates,key=lambda r:r['observed_at'])
     n=len(candidates); cut=int(n*.7); valcut=int(n*.85)
     train=candidates[:cut]; calibration=candidates[cut:valcut]; test=candidates[valcut:]
+    if any(len({r['sold_within_7_days'] for r in part})<2 for part in [calibration,test]):return None
     if len({r['sold_within_7_days'] for r in train})<2:
         return None
     x=np.array([features(r) for r in train]); y=np.array([r['sold_within_7_days'] for r in train])
@@ -107,6 +140,8 @@ def fit_model():
             bins.append({'predicted':round(float(prediction[mask].mean()),3),'observed':round(float(ty[mask].mean()),3),'n':int(mask.sum())})
     report=dict(source='imported' if using_real else 'synthetic',rows=n,train_rows=cut,calibration_rows=valcut-cut,test_rows=n-valcut,brier=round(float(np.mean((prediction-ty)**2)),4),baseline_brier=round(float(np.mean((baseline-ty)**2)),4),log_loss=round(float(-np.mean(ty*np.log(prediction+1e-9)+(1-ty)*np.log(1-prediction+1e-9))),4),temperature=temp,coefficients=[round(float(b),4) for b in beta],calibration=bins,method='L2-regularized logistic regression, non-positive price coefficient, chronological 70/15/15 split, temperature chosen on calibration set; final test set used only for reporting.',limitation='Associational prediction, not causal uplift. Synthetic validation does not establish real market performance.',pending_real_rows=len(real) if not using_real else 0)
     model=(beta,temp,report)
+    if report['brier']>=report['baseline_brier']:return None
+    report.update(source='observed_and_imported' if any(r['source']=='seller_reported_observed' for r in real) else 'imported',source_counts={source:sum(r['source']==source for r in real) for source in {r['source'] for r in real}},limitation='Seller-reported observations and imported labels are not independently audited transactions. Associations do not establish causal uplift. Foreign markets and other categories are not covered.')
     _cache.clear(); _cache[digest]=model
     return model
 
@@ -118,13 +153,17 @@ def probability(item,price,market,model):
     beta,temp,_=model
     return float(1/(1+math.exp(-float(np.array(features(r))@beta/temp))))
 
-def evaluate(item):
-    comp=comparables(item); model=fit_model() if item['category'] in ['Laptop','Monitor'] else None
+def evaluate(item,market='US',mode='exact',basis='item'):
+    comp=comparables(item,market,mode,basis); model=fit_model() if market=='US' and mode=='exact' and basis=='item' and item['category'] in ['Laptop','Monitor'] else None
     if not comp['available']:
         return dict(comparables=comp,strategies=[],curve=[],model=model[2] if model else None)
+    if basis=='delivered':
+        return dict(comparables=comp,strategies=[],curve=[],model=None,limitation='Delivered totals are comparison references, not item asking-price recommendations. Taxes remain unverified.')
+    if markets.get(market)['currency']!=item.get('currency','USD'):
+        return dict(comparables=comp,strategies=[],curve=[],model=None,limitation='Research currency differs from inventory accounting. No currency conversion or price application is performed.')
     market=comp['median']; floor=max(item['reserve'],math.ceil(item['cost']/(1-item['fee_rate'])))
     # Price recommendation cannot violate the merchant floor or the training support.
-    low=max(floor,round(market*.70)); high=round(market*1.35)
+    low=max(floor,round(market*.70)); high=min(100000,round(market*1.35))
     curve=[]
     for price in np.linspace(low,high,45) if low<=high else []:
         price=round(float(price)); p=probability(item,price,market,model) if model else None
@@ -138,7 +177,7 @@ def evaluate(item):
     elif not model:
         curve=[]
         if comp['high']>=floor:
-            strategies=[dict(id=s,title=t,price=round(max(floor,value)),sale_probability=None,expected_contribution=None,net_margin=round(max(floor,value)*(1-item['fee_rate'])-item['cost'],2),basis='Observed asking-price position; no sale-speed or demand forecast.') for s,t,value in [('fast','Lower market quartile',comp['low']),('balanced','Market median',comp['median']),('premium','Upper market quartile',comp['high'])]]
+            strategies=[dict(id=s,title=t,price=round(max(floor,value)),sale_probability=None,expected_contribution=None,net_margin=round(max(floor,value)*(1-item['fee_rate'])-item['cost'],2),basis='Observed asking-price position; no sale-speed or demand forecast.') for s,t,value in [('fast','Lower market quartile',comp['low']),('balanced','Market median',comp['median']),('premium','Upper market quartile',comp['high'])] if max(floor,value)<=100000]
     currentp=probability(item,item['price'],market,model) if model else None
     currentmargin=item['price']*(1-item['fee_rate'])-item['cost']
     return dict(comparables=comp,strategies=strategies,curve=curve,model=model[2] if model else None,floor=floor,current=dict(price=item['price'],sale_probability=round(currentp,4) if currentp is not None else None,net_margin=round(currentmargin,2)),objective='7-day expected contribution = P(sale) × (price × (1 − fee) − cost) − 7 × daily holding cost × (1 − P(sale)). Excludes unsold asset value; use to compare the same item over a fixed horizon.')

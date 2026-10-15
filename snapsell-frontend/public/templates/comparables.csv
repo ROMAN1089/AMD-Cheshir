@@ -1,1 +1,1 @@
-model_key,title,price,condition,kind,age_days,source_name,url
+model_key,title,price,condition,kind,age_days,source_name,url,market,currency

@@ -25,12 +25,20 @@ import amd
 import commerce
 import video
 import research
+import markets
+import outcomes
+import deals
+import google_calendar
 import channels
+import ebay
 from catalog import CATEGORIES
 
 app=Flask(__name__)
 store.initialize()
 store.purge_samples()
+# Repair legacy external records that were saved while their items stayed drafts.
+for linked_id in {a.get('item_id') for a in store.all_rows('actions') if a.get('type')=='external_listing'}:
+    if linked_id:channels.reconcile_item(linked_id)
 for interrupted in store.all_rows('jobs'):
     if interrupted['status'] in ['queued','processing']:
         message='The server restarted during research. Run research again.' if interrupted.get('type')=='market_research' else 'The server restarted during extraction. Your upload is saved; retry extraction.'
@@ -54,6 +62,12 @@ def number(value,name,low=0,high=100000):
     except (ValueError,TypeError): raise Invalid(f'{name} must be a number.')
     if not math.isfinite(result) or not low<=result<=high: raise Invalid(f'{name} must be between {low} and {high}.')
     return round(result,2)
+
+def binary(value,name):
+    try:result=float(value)
+    except (TypeError,ValueError):raise Invalid(name+' must be exactly 0 or 1.')
+    if result not in [0,1]:raise Invalid(name+' must be exactly 0 or 1.')
+    return int(result)
 
 def body():
     data=request.get_json(silent=True)
@@ -122,19 +136,103 @@ def workspace():
     jobs=[{k:v for k,v in j.items() if k!='path'} for j in store.all_rows('jobs')]
     return jsonify(items=items,analytics=commerce.analytics(),actions=commerce.actions(),conversations=store.all_rows('conversations'),orders=store.all_rows('orders'),jobs=jobs,amd=dict(configured=amd.configured(),speech_ready=video.speech.ready(),calls=len(inference),input_tokens=sum(a['input_tokens'] for a in inference),output_tokens=sum(a['output_tokens'] for a in inference),recent=inference[-10:]))
 
+@app.get('/api/google-calendar')
+def google_status():return jsonify(google_calendar.status())
+
+@app.post('/api/google-calendar/connect')
+def google_connect():
+    import time
+    config=google_calendar.settings()
+    state=secrets.token_urlsafe(32);verifier=secrets.token_urlsafe(64)
+    url=google_calendar.authorize_url(state,verifier)
+    session['google_oauth']={'state':state,'verifier':verifier,'expires_at':time.time()+600,'client_id':config['client_id'],'redirect_uri':config['redirect_uri']}
+    return jsonify(url=url)
+
+@app.get('/api/google-calendar/callback')
+def google_callback():
+    import time
+    from flask import redirect
+    pending=session.pop('google_oauth',{})
+    c=google_calendar.settings()
+    if not pending or not secrets.compare_digest(request.args.get('state',''),pending['state']) or time.time()>pending['expires_at'] or pending['client_id']!=c['client_id'] or pending['redirect_uri']!=c['redirect_uri']:
+        raise Invalid('Google authorization expired or did not match this session. Connect again.')
+    if request.args.get('error') or not request.args.get('code'):raise Invalid('Google authorization was declined. Return to Deals to reconnect.')
+    google_calendar.exchange(request.args['code'],pending['verifier'])
+    return redirect('/?google=connected')
+
+@app.post('/api/google-calendar/disconnect')
+def google_disconnect():
+    session.pop('google_oauth',None)
+    return jsonify(google_calendar.disconnect())
+
+@app.post('/api/google-calendar/check/<slot_id>')
+def google_check(slot_id):
+    slot=store.get('availability',slot_id)
+    if not slot:raise Invalid('Interval not found.')
+    return jsonify(available=not bool(google_calendar.busy(slot['start'],slot['end'])),checked_at=store.now())
+
+@app.post('/api/google-calendar/sync/<appointment_id>')
+def google_sync(appointment_id):
+    if body().get('confirm') is not True:raise Invalid('Confirm copying meeting details to your Google Calendar.')
+    return jsonify(google_calendar.sync(appointment_id,enable=True))
+
+@app.get('/api/deals')
+def deal_workspace(): return jsonify(deals.workspace())
+
+@app.post('/api/deals/availability')
+def deal_availability(): return jsonify(deals.add_slot(body()))
+
+@app.delete('/api/deals/availability/<slot_id>')
+def deal_close_slot(slot_id): return jsonify(deals.close_slot(slot_id))
+
+@app.post('/api/deals/appointments')
+def deal_book(): return jsonify(deals.book(body()))
+
+@app.post('/api/deals/appointments/<appointment_id>')
+def deal_update(appointment_id): return jsonify(deals.update(appointment_id,body()))
+
+@app.get('/api/deals/appointments/<appointment_id>/calendar')
+def deal_calendar(appointment_id):
+    from flask import Response
+    return Response(deals.calendar(appointment_id),mimetype='text/calendar',headers={'Content-Disposition':'attachment; filename="pickup.ics"'})
+
 @app.get('/api/items/<item_id>/pricing')
-def pricing_route(item_id): return jsonify(pricing.evaluate(item_or_404(item_id)))
+def pricing_route(item_id): return jsonify(pricing.evaluate(item_or_404(item_id),request.args.get('market','US'),request.args.get('mode','exact'),request.args.get('basis','item')))
+
+@app.route('/api/items/<item_id>/outcome',methods=['GET','POST'])
+@ebay.serialized
+def observed_outcome(item_id):
+    item=item_or_404(item_id)
+    if request.method=='GET':return jsonify(window=outcomes.current(item_id))
+    data=body()
+    if data.get('action')=='begin':return jsonify(window=outcomes.begin(item))
+    if data.get('action')=='confirm_unsold' and data.get('confirm') is True:return jsonify(window=outcomes.confirm_unsold(item))
+    raise Invalid('Choose begin, or explicitly confirm that the item was unsold throughout its seven-day window.')
 
 @app.route('/api/items/<item_id>/research',methods=['GET','POST'])
 def research_item(item_id):
     item=item_or_404(item_id)
-    if request.method=='GET': return jsonify(item=item,job=research.latest(item_id),pricing=pricing.evaluate(item))
+    if request.method=='GET':
+        market=request.args.get('market','US');mode=request.args.get('mode','exact');basis=request.args.get('basis','item')
+        return jsonify(item=item,job=research.latest(item_id,market,mode),pricing=pricing.evaluate(item,market,mode,basis),schedule=research.schedule(item_id,market,mode),outcome_window=outcomes.current(item_id))
     d=body(); urls=d.get('source_urls',[])
+    markets.get(d.get('market','US'))
+    if d.get('mode','exact') not in ['exact','similar']:raise Invalid('Choose exact or similar product comparison.')
     if not isinstance(urls,list) or len(urls)>5 or any(not isinstance(u,str) for u in urls): raise Invalid('Provide at most five direct product URLs.')
     for u in urls: research.canonical(u)
-    return jsonify(job=research.start(item_id,urls)),202
+    if 'auto_refresh' in d:research.schedule(item_id,d.get('market','US'),d.get('mode','exact'),d['auto_refresh'],urls)
+    return jsonify(job=research.start(item_id,urls,d.get('market','US'),d.get('mode','exact'))),202
+
+@app.post('/api/items/<item_id>/research/schedule')
+def research_schedule(item_id):
+    item_or_404(item_id);data=body();urls=data.get('source_urls',[])
+    if not isinstance(urls,list) or len(urls)>5 or any(not isinstance(u,str) for u in urls):raise Invalid('Provide at most five direct product URLs.')
+    for url in urls:research.canonical(url)
+    if not isinstance(data.get('enabled'),bool):raise Invalid('Specify whether daily refresh is enabled using true or false.')
+    return jsonify(schedule=research.schedule(item_id,data.get('market','US'),data.get('mode','exact'),data['enabled'],urls))
 
 @app.post('/api/items/<item_id>/identity/confirm')
+@ebay.serialized
 def confirm_identity(item_id):
     import identity
     item_or_404(item_id);data=body()
@@ -181,11 +279,16 @@ def validate_item(d):
     return out
 
 @app.patch('/api/items/<item_id>')
+@ebay.serialized
 def update_item(item_id):
     item=item_or_404(item_id)
     if item['status']=='sold': raise Invalid('Completed sales cannot be edited.')
     previous=research.fingerprint(item)
-    item.update(validate_item(body()))
+    changes=validate_item(body())
+    if any(k in changes and changes[k]!=item.get(k) for k in ['title','brand','category','model_key','condition','specs','description','price']):outcomes.invalidate(item_id)
+    if any(k in changes and changes[k]!=item.get(k) for k in ['title','brand','category','model_key','condition','specs','description']):
+        item['confirmed']=False
+    item.update(changes)
     if item.get('image','').startswith('/assets/'):
         item['image']='/assets/monitor.svg' if item['category']=='Monitor' else '/assets/laptop-silver.svg' if item['category']=='Laptop' else '/assets/product.svg'
     item=store.put('items',item)
@@ -193,9 +296,10 @@ def update_item(item_id):
     return jsonify(item)
 
 @app.post('/api/items/<item_id>/publish')
+@ebay.serialized
 def publish(item_id):
     item=item_or_404(item_id); d=body()
-    if item['status']=='sold': raise Invalid('Completed sales cannot be relisted.')
+    if item['status'] in ['sold','sale_pending']: raise Invalid('Completed or detected sales cannot be relisted.')
     if d.get('confirm_facts') is not True: raise Invalid('Review and confirm the product facts first.')
     floor=max(item['reserve'],item['cost']/(1-item['fee_rate']))
     if item['price']<=0 or item['price']<floor: raise Invalid('Set a positive price covering your cost, fees and minimum price.')
@@ -206,6 +310,58 @@ def publish(item_id):
 @app.get('/api/channels')
 def channels_workspace():return jsonify(channels.workspace())
 
+@app.get('/api/ebay')
+def ebay_connection():return jsonify(ebay.status())
+
+@app.post('/api/ebay/connect')
+def ebay_connect():
+    state=secrets.token_urlsafe(32)
+    session['ebay_oauth']={'state':state,'expires_at':__import__('time').time()+600,'environment':ebay.settings()['environment']}
+    return jsonify(url=ebay.authorize_url(state))
+
+@app.get('/api/ebay/callback')
+def ebay_callback():
+    pending=session.pop('ebay_oauth',{})
+    supplied=request.args.get('state','')
+    if not pending or not secrets.compare_digest(supplied,pending['state']) or __import__('time').time()>pending['expires_at'] or pending['environment']!=ebay.settings()['environment']:
+        raise Invalid('eBay authorization expired or state did not match. Connect again.')
+    if request.args.get('error') or not request.args.get('code'):raise Invalid('eBay authorization was declined. Connect again when ready.')
+    ebay.exchange(request.args['code'])
+    from flask import redirect
+    return redirect('/?ebay=connected')
+
+@app.post('/api/ebay/disconnect')
+def ebay_disconnect():
+    if ebay.settings()['refresh_token']:raise Invalid('Remove EBAY_REFRESH_TOKEN from .env to disconnect environment-based authorization.')
+    with ebay.LOCK:ebay.token_path().unlink(missing_ok=True)
+    session.pop('ebay_oauth',None)
+    return jsonify(connected=False)
+
+@app.get('/api/ebay/options')
+def ebay_options():return jsonify(ebay.options())
+
+@app.get('/api/ebay/categories/<category_id>')
+def ebay_category(category_id):return jsonify(ebay.category_metadata(category_id))
+
+@app.post('/api/ebay/settings')
+def ebay_save_settings():return jsonify(ebay.save_settings(body()))
+
+@app.post('/api/ebay/sync')
+def ebay_sync():return jsonify(results=ebay.sync_all())
+
+@app.post('/api/items/<item_id>/ebay/<operation>')
+def ebay_item_action(item_id,operation):
+    item_or_404(item_id);data=body()
+    if operation=='check':return jsonify(ebay.check(item_id))
+    if operation=='attach':
+        if data.get('confirm') is not True:raise Invalid('Confirm that this eBay SKU belongs to this physical item.')
+        return jsonify(ebay.attach_sku(item_id,data.get('sku','')))
+    if operation not in ['publish','update','withdraw']:raise Invalid('Choose publish, update, withdraw or check.')
+    if data.get('confirm') is not True:raise Invalid('Confirm the eBay action before continuing.')
+    if operation=='publish':return jsonify(ebay.publish(item_id,data.get('settings',{})))
+    if operation=='update':return jsonify(ebay.update(item_id,data.get('settings') or None))
+    return jsonify(ebay.withdraw(item_id))
+
 @app.get('/api/items/<item_id>/channels/<name>')
 def listing_kit(item_id,name):return jsonify(channels.prepare(item_or_404(item_id),name)[0])
 
@@ -215,12 +371,14 @@ def download_listing_kit(item_id,name):
     return app.response_class(data,mimetype='application/zip',headers={'Content-Disposition':f'attachment; filename=snapsell-{name}-{item_id}.zip'})
 
 @app.post('/api/items/<item_id>/channels/<name>/link')
+@ebay.serialized
 def save_external_listing(item_id,name):
     d=body()
     if d.get('confirm_posted') is not True:raise Invalid('Confirm that you posted this listing on the external marketplace.')
     return jsonify(channels.record_listing(item_or_404(item_id),name,str(d.get('url','')).strip()))
 
 @app.post('/api/items/<item_id>/channels/sale')
+@ebay.serialized
 def record_external_sale(item_id):
     d=body();item_or_404(item_id)
     if d.get('confirm_completed') is not True:raise Invalid('Confirm the external transaction is complete.')
@@ -231,7 +389,11 @@ def confirm_external_removal(listing_id):
     d=body();listing=store.get('actions',listing_id)
     if not listing or listing.get('type')!='external_listing' or listing.get('status') not in ['posted','needs_removal']:raise Invalid('Choose an active external listing.')
     if d.get('confirm_removed') is not True:raise Invalid('Confirm that you removed the listing on the marketplace.')
-    listing.update(status='removed',removed_at=store.now(),source='seller_reported');return jsonify(store.put('actions',listing))
+    if listing.get('source')=='ebay_api':raise Invalid('Use Withdraw on eBay to end an API-connected listing.')
+    outcomes.invalidate(listing['item_id'],'The listing was removed during the observation window.')
+    listing.update(status='removed',removed_at=store.now(),source='seller_reported');store.put('actions',listing)
+    channels.reconcile_item(listing['item_id'])
+    return jsonify(listing)
 
 @app.post('/api/items/<item_id>/channels/<name>/reply')
 def marketplace_reply(item_id,name):
@@ -240,23 +402,27 @@ def marketplace_reply(item_id,name):
     return jsonify(channels.draft_reply(item_or_404(item_id),amd.redact(message),name))
 
 @app.post('/api/items/<item_id>/review')
+@ebay.serialized
 def confirm_listing_facts(item_id):
     item=item_or_404(item_id)
     if body().get('confirm_facts') is not True:raise Invalid('Confirm that you reviewed the product facts.')
     item.update(confirmed=True);return jsonify(store.put('items',item))
 
 @app.post('/api/items/<item_id>/strategy')
+@ebay.serialized
 def strategy(item_id):
     item=item_or_404(item_id)
     if item['status']=='sold': raise Invalid('This item has already sold.')
     selected=next((s for s in pricing.evaluate(item)['strategies'] if s['id']==body().get('strategy')),None)
     if not selected: raise Invalid('No supported recommendation. Import exact-model comparables first.')
     before=item['price']; item.update(price=selected['price'],strategy=selected['id'])
+    if before!=item['price']:outcomes.invalidate(item_id)
     model=pricing.fit_model()
     store.put('items',item); store.event(item_id,'price_change',before=before,after=item['price'],model_source=model[2]['source'] if model else 'observed_asking_prices')
     return jsonify(item)
 
 @app.post('/api/actions/<action_id>/apply')
+@ebay.serialized
 def apply_action(action_id):
     action=next((a for a in commerce.actions() if a['id']==action_id),None)
     if not action: raise Invalid('This action is no longer available.')
@@ -264,6 +430,8 @@ def apply_action(action_id):
     before=item['description'] if action['kind']=='description' else item['price']
     if action['kind']=='description': item['description']+=' Includes: '+item['specs']['included']+'.'
     else: item['price']=action['price']
+    if action['kind']=='description':item['confirmed']=False
+    outcomes.invalidate(item['id'])
     store.put('items',item); store.put('actions',dict(id=action_id,type='applied',at=store.now(),item_id=item['id'],before=before,action=action))
     store.event(item['id'],'action',kind_applied=action['kind'],evidence_source=action['evidence_source'])
     return jsonify(item)
@@ -342,6 +510,7 @@ def offer(item_id):
     return jsonify(id=order['id'],status='pending',message='Offer sent. The seller must approve the price and pickup details.'),201
 
 @app.post('/api/orders/<order_id>/decide')
+@ebay.serialized
 def decide(order_id):
     order=store.get('orders',order_id); d=body()
     if not order or order['status']!='pending': raise Invalid('Offer is no longer pending.')
@@ -355,7 +524,8 @@ def decide(order_id):
 @app.get('/api/model')
 def model_report():
     model=pricing.fit_model()
-    return jsonify(report=model[2] if model else None)
+    rows=[r for r in store.all_rows('history') if r.get('source')!='synthetic' and r.get('market','US')=='US' and r.get('currency','USD')=='USD']
+    return jsonify(report=model[2] if model else None,observations=len(rows),requirements='At least 120 US/USD outcomes, both classes in chronological training/calibration/test splits, and held-out Brier score better than the constant baseline. Seller-reported and imported labels are not independently audited.')
 
 @app.route('/api/amd',methods=['GET','POST'])
 def amd_status():
@@ -379,15 +549,25 @@ def import_data():
         try:
             if kind=='comparables':
                 if not row.get('model_key') or row.get('kind') not in ['sold','asking'] or row.get('condition') not in pricing.CONDITION: raise Invalid('Required: model_key, price, condition, kind (sold/asking).')
-                prepared.append(dict(id=str(uuid4()),model_key=pricing.key(row['model_key']),title=row.get('title',row['model_key'])[:180],price=number(row['price'],'price',1),condition=row['condition'],kind=row['kind'],age_days=number(row.get('age_days',0),'age_days',0,365),source='imported',source_name=row.get('source_name','Seller import')[:100],url=row.get('url','')[:500],observed_at=store.now()))
+                market=markets.get(row.get('market') or 'US')
+                if (row.get('currency') or market['currency'])!=market['currency']:raise Invalid('Imported currency must match its research country.')
+                if research.unknown(row['model_key']):raise Invalid('Imported exact-model comparables need a known model key.')
+                prepared.append(dict(id=str(uuid4()),model_key=pricing.key(row['model_key']),title=row.get('title',row['model_key'])[:180],price=number(row['price'],'price',.01,1_000_000_000),currency=market['currency'],market=market['code'],condition=row['condition'],kind=row['kind'],age_days=number(row.get('age_days',0),'age_days',0,365),source='imported',source_name=row.get('source_name','Seller import')[:100],url=row.get('url','')[:500],observed_at=store.now()))
             else:
+                if (row.get('market') or 'US')!='US' or (row.get('currency') or 'USD')!='USD':raise Invalid('Outcome history currently supports US/USD only.')
                 ts=datetime.fromisoformat(row['observed_at'].replace('Z','+00:00'))
-                prepared.append(dict(id=str(uuid4()),price_ratio=number(row['price_ratio'],'price_ratio',.65,1.4),age_days=number(row['age_days'],'age_days',0,60),excellent=int(number(row['excellent'],'excellent',0,1)),monitor=int(number(row['monitor'],'monitor',0,1)),completeness=number(row['completeness'],'completeness',.4,1),sold_within_7_days=int(number(row['sold_within_7_days'],'sold_within_7_days',0,1)),observed_at=ts.isoformat(),source='imported'))
+                if ts.tzinfo is None or ts>datetime.now().astimezone():raise Invalid('History needs a past timestamp with timezone.')
+                prepared.append(dict(id=str(uuid4()),price_ratio=number(row['price_ratio'],'price_ratio',.65,1.4),age_days=number(row['age_days'],'age_days',0,60),excellent=binary(row['excellent'],'excellent'),monitor=binary(row['monitor'],'monitor'),completeness=number(row['completeness'],'completeness',.4,1),sold_within_7_days=binary(row['sold_within_7_days'],'sold_within_7_days'),observed_at=ts.isoformat(),source='imported'))
         except (Invalid,KeyError,ValueError): raise Invalid(f'Invalid CSV row {idx+2}. Check the documented columns and value ranges.')
     # All-or-nothing import; schema validated before the transaction.
+    if kind=='history':
+        import hashlib
+        for row in prepared:row['id']='csv-history:'+hashlib.sha256(json.dumps({k:v for k,v in row.items() if k!='id'},sort_keys=True).encode()).hexdigest()
     with store.connection() as db:
-        db.executemany(f'INSERT INTO {kind}(id,body) VALUES(?,?)',[(r['id'],json.dumps(r)) for r in prepared])
-    return jsonify(imported=len(prepared),kind=kind)
+        before=db.total_changes
+        db.executemany(f'INSERT INTO {kind}(id,body) VALUES(?,?) ON CONFLICT(id) DO NOTHING',[(r['id'],json.dumps(r)) for r in prepared])
+        imported=db.total_changes-before
+    return jsonify(imported=imported,skipped_duplicates=len(prepared)-imported,kind=kind)
 
 @app.get('/api/export')
 def export():
@@ -404,4 +584,7 @@ def media(filename):
 
 if __name__=='__main__':
     from waitress import serve
+    ebay.start_worker()
+    research.start_worker()
+    google_calendar.start_worker()
     serve(app,host=os.getenv('HOST','127.0.0.1'),port=int(os.getenv('PORT','5000')),threads=6)

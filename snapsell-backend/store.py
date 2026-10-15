@@ -34,12 +34,12 @@ def connection():
 
 def initialize():
     with connection() as db:
-        for name in ['items', 'comparables', 'conversations', 'jobs', 'history', 'actions', 'orders']:
+        for name in ['items', 'comparables', 'conversations', 'jobs', 'history', 'actions', 'orders', 'availability', 'appointments']:
             db.execute(f'CREATE TABLE IF NOT EXISTS {name} (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
         db.execute('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, body TEXT NOT NULL)')
         db.execute('CREATE INDEX IF NOT EXISTS event_item ON events(item_id, kind)')
 
-TABLES = {'items','comparables','conversations','jobs','history','actions','orders'}
+TABLES = {'items','comparables','conversations','jobs','history','actions','orders','availability','appointments'}
 
 def all_rows(table):
     if table not in TABLES:
@@ -114,5 +114,7 @@ def complete_order(item_id, offer_id, amount):
         order.update(status='completed', completed_at=now(),economics={'cost':item['cost'],'fee_rate':item['fee_rate'],'net_contribution':round(amount*(1-item['fee_rate'])-item['cost'],2)})
         db.execute('UPDATE items SET body=? WHERE id=?', (json.dumps(item), item_id))
         db.execute('UPDATE orders SET body=? WHERE id=?', (json.dumps(order), offer_id))
+        import outcomes
+        outcomes.record_sale(db,item,order)
         db.execute('INSERT INTO events VALUES(?,?,?,?,?,?)', (str(uuid4()),item_id,'sale','live',now(),json.dumps({'amount':amount,'offer_id':offer_id})))
     return order

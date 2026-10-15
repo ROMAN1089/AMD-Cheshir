@@ -24,6 +24,14 @@ def isolated(monkeypatch):
     pricing._cache.clear()
     app._requests.clear()
     monkeypatch.setattr(research,'start',lambda *a,**k:None)
+    # No test may use the seller's real inference or marketplace credentials.
+    monkeypatch.setattr(app.amd,'configured',lambda:False)
+    monkeypatch.setattr(app.research.browse,'configured',lambda:False)
+    monkeypatch.setattr(app.ebay,'dotenv_values',lambda *a,**k:{})
+    for name in ['EBAY_CLIENT_ID','EBAY_CLIENT_SECRET','EBAY_RUNAME','EBAY_REFRESH_TOKEN']:
+        monkeypatch.delenv(name,raising=False)
+    monkeypatch.setenv('EBAY_ENVIRONMENT','sandbox')
+    monkeypatch.setenv('EBAY_ENABLE_PRODUCTION','false')
 
 @pytest.fixture
 def item():
@@ -73,7 +81,7 @@ def test_search_snippet_or_visible_number_is_not_price_evidence(item):
     assert research.parse_offers(d,item)[0]==[]
 
 def test_primary_product_metadata_requires_price_currency_and_stock(item):
-    d=document();d['text']='''<html><head><meta property="og:type" content="product"><meta property="og:title" content="Used Dell UltraSharp U2720Q"><meta property="product:price:amount" content="249.00"><meta property="product:price:currency" content="USD"><meta property="product:availability" content="in stock"></head></html>'''
+    d=document();d['text']='''<html><head><meta property="og:type" content="product"><meta property="og:title" content="Used Dell UltraSharp U2720Q 27-inch 4K"><meta property="product:price:amount" content="249.00"><meta property="product:price:currency" content="USD"><meta property="product:availability" content="in stock"></head></html>'''
     rows,_=research.parse_offers(d,item)
     assert rows and rows[0]['price']==249
     d['text']=d['text'].replace('content="in stock"','content="out of stock"')
@@ -81,7 +89,7 @@ def test_primary_product_metadata_requires_price_currency_and_stock(item):
 
 def test_model_generation_and_capacity_must_match(item):
     assert research.model_match(item,'Used Dell UltraSharp U2723QE')[0] is False
-    laptop={**item,'category':'Laptop','title':'Lenovo ThinkPad T14 Gen 2','model_key':'thinkpad-t14','specs':{'memory':'16GB','storage':'512GB SSD'}}
+    laptop={**item,'brand':'Lenovo','category':'Laptop','title':'Lenovo ThinkPad T14 Gen 2','model_key':'thinkpad-t14','specs':{'memory':'16GB','storage':'512GB SSD'}}
     assert not research.model_match(laptop,'Lenovo ThinkPad T14 Gen 1 16GB 512GB')[0]
     assert not research.model_match(laptop,'Lenovo ThinkPad T14 Gen 2 8GB 256GB')[0]
     assert research.model_match(laptop,'Lenovo ThinkPad T14 Gen 2 16GB RAM 512GB SSD')[0]
@@ -245,7 +253,7 @@ def test_non_electronic_forecast_is_not_inherited_from_laptop_history(item,monke
     assert pricing.evaluate({**item,'category':'Furniture'})['model'] is None
 
 def test_goods_attributes_are_checked_in_price_evidence(item):
-    shoe={**item,'category':'Shoes','model_key':'nike-air-max-90','specs':{'size':'9','color':'Black'}}
+    shoe={**item,'brand':'Nike','category':'Shoes','model_key':'nike-air-max-90','specs':{'size':'9','color':'Black'}}
     assert not research.model_match(shoe,'Used Nike Air Max 90 size 10 Black')[0]
     assert not research.model_match(shoe,'Used Nike Air Max 90 size 9 White')[0]
     assert research.model_match(shoe,'Used Nike Air Max 90 size 9 Black')[0]
@@ -378,3 +386,63 @@ def test_review_confirms_facts_without_publishing_store_listing(item,seller):
     store.put('items',{**item,'status':'draft','confirmed':False})
     response=seller.post(f'/api/items/{item["id"]}/review',json={'confirm_facts':True})
     assert response.status_code==200 and response.json['confirmed'] is True and response.json['status']=='draft'
+
+def test_fact_changes_require_review_but_price_changes_do_not(item,seller):
+    assert seller.patch('/api/items/actual-item',json={'price':310}).json['confirmed'] is True
+    assert seller.patch('/api/items/actual-item',json={'description':'Changed facts'}).json['confirmed'] is False
+    assert seller.post('/api/items/actual-item/channels/ebay/link',json={'url':'https://www.ebay.com/itm/123','confirm_posted':True}).status_code==400
+
+def test_external_listing_updates_inventory_and_removal_reconciles(item,seller):
+    import commerce
+    store.put('items',{**item,'status':'draft'})
+    listing=seller.post('/api/items/actual-item/channels/ebay/link',json={'url':'https://www.ebay.com/itm/123','confirm_posted':True}).json
+    assert store.get('items',item['id'])['status']=='listed'
+    assert commerce.analytics()['active_count']==1
+    seller.patch('/api/items/actual-item',json={'price':320})
+    assert seller.get('/api/channels').json['listings'][0]['needs_sync'] is True
+    seller.post(f'/api/channels/listings/{listing["id"]}/removed',json={'confirm_removed':True})
+    assert store.get('items',item['id'])['status']=='draft'
+
+def test_external_sale_counts_once_in_overview(item,seller):
+    import commerce
+    listing=seller.post('/api/items/actual-item/channels/ebay/link',json={'url':'https://www.ebay.com/itm/123','confirm_posted':True}).json
+    payload={'listing_id':listing['id'],'amount':280,'fee':20,'cost':100,'confirm_completed':True}
+    assert seller.post('/api/items/actual-item/channels/sale',json=payload).status_code==200
+    assert seller.post('/api/items/actual-item/channels/sale',json=payload).status_code==400
+    report=commerce.analytics()
+    assert report['completed_sales']==1 and report['external']['sales']==1 and report['live']['sales']==0
+
+def test_reply_uses_supported_price_and_does_not_claim_unreviewed_facts(item,seller,monkeypatch):
+    import channels
+    monkeypatch.setattr(channels.amd,'configured',lambda:False)
+    store.put('items',{**item,'price':0})
+    monkeypatch.setattr(channels,'prepare',lambda *a:({'price_usd':245},None))
+    reply=seller.post('/api/items/actual-item/channels/ebay/reply',json={'message':'Hello'}).json
+    assert '$245.00' in reply['answer'] and '$0' not in reply['answer']
+    store.put('items',{**item,'confirmed':False})
+    reply=seller.post('/api/items/actual-item/channels/ebay/reply',json={'message':'What specs?'}).json
+    assert 'need seller review' in reply['answer'] and 'Seller-confirmed specifications' not in reply['answer']
+
+def test_pasted_questions_inform_actions_without_fake_live_events(item,seller,monkeypatch):
+    import channels,commerce
+    monkeypatch.setattr(channels.amd,'configured',lambda:False)
+    for _ in range(3):seller.post('/api/items/actual-item/channels/ebay/reply',json={'message':'Is the stand included?'})
+    assert store.events()==[] and store.all_rows('conversations')==[]
+    assert commerce.analytics()['recorded_questions']==3
+    action=commerce.actions()[0]
+    assert action['evidence_source']=='seller_reported'
+    seller.post(f'/api/actions/{action["id"]}/apply',json={})
+    assert store.get('items',item['id'])['confirmed'] is False
+
+def test_empty_new_research_invalidates_old_prices(item,monkeypatch):
+    old=research.parse_offers(document(),item)[0][0]
+    old.update(item_id=item['id'],item_fingerprint=research.fingerprint(item))
+    store.put('comparables',old)
+    monkeypatch.setattr(research,'plan',lambda i:([],None))
+    monkeypatch.setattr(research,'discover',lambda *a,**k:([],[]))
+    monkeypatch.setattr(research,'refine',lambda *a:([],[],None))
+    monkeypatch.setattr(research.amd,'configured',lambda:False)
+    job=store.put('jobs',{'item_id':item['id'],'status':'queued','item_fingerprint':research.fingerprint(item)})
+    research.run(job['id'])
+    assert not store.all_rows('comparables')
+    assert store.get('jobs',job['id'])['status']=='completed'
