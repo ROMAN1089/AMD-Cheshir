@@ -96,7 +96,7 @@ def run(job_id):
             except (ValueError,TypeError): idx=0
             specs=raw.get('specs',{})
             specs={str(k)[:50]:str(v)[:250] for k,v in specs.items()} if isinstance(specs,dict) else {}
-            item=dict(id=str(uuid4()),title=__import__('identity').clean_title(raw.get('title','Unidentified item')),brand=str(raw.get('brand','Unknown'))[:60],category=raw['category'],model_key=key(str(raw.get('model_key','unknown'))),condition='Good',specs=specs,subtitle='Extracted from your video · needs review',description=str(raw.get('description',''))[:2000],image=sample[idx]['url'],price=0,cost=0,reserve=0,fee_rate=0,holding_cost=0,age_days=0,status='draft',confirmed=False,source='video',use_case='General productivity',uncertainties=raw.get('uncertainties',[]) if isinstance(raw.get('uncertainties',[]),list) else [],created_at=store.now(),job_id=job_id,confidence=max(0,min(1,float(raw.get('confidence',.5)) if isinstance(raw.get('confidence',.5),(float,int)) else .5)))
+            item=dict(id=str(uuid4()),title=__import__('identity').clean_title(raw.get('title','Unidentified item')),brand=str(raw.get('brand','Unknown'))[:60],category=raw['category'],model_key=key(str(raw.get('model_key','unknown'))),condition='Not verified',specs=specs,subtitle='Extracted from your video · needs review',description=str(raw.get('description',''))[:2000],image=sample[idx]['url'],price=0,cost=0,reserve=0,fee_rate=0,holding_cost=0,age_days=0,status='draft',confirmed=False,source='video',use_case='General productivity',uncertainties=raw.get('uncertainties',[]) if isinstance(raw.get('uncertainties',[]),list) else [],created_at=store.now(),job_id=job_id,confidence=max(0,min(1,float(raw.get('confidence',.5)) if isinstance(raw.get('confidence',.5),(float,int)) else .5)))
             result.append(item)
         message=f'{len(result)} products extracted. Confirm facts and economics before publishing.' if result else 'No physical products for sale were identified. Film the real items closely and describe what you want to sell.'
         job.update(status='completed',stage='Ready for seller review' if result else 'No supported products found',message=message,item_ids=[i['id'] for i in result],transcript=speech,vision_model=model,audio_model=audio_model,duration=round(duration,1),warnings=warnings,frames=[{'second':s['second'],'url':s['url']} for s in sample])
@@ -108,7 +108,7 @@ def run(job_id):
             db.execute('UPDATE jobs SET body=? WHERE id=?',(json.dumps(job),job_id))
         for item in result:
             if not research.unknown(item['model_key']):
-                try:research.start(item['id'])
+                try:research.start(item['id']) if item.get('category')!='Phone' else None
                 except Exception:pass # A research outage must not undo completed extraction.
     except Exception as exc:
         job.update(status='failed',message=str(exc) if isinstance(exc,(ValueError,RuntimeError)) else 'Video processing failed. Try another video or retry.',stage='Needs attention'); store.put('jobs',job)

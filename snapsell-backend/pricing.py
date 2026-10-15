@@ -9,7 +9,7 @@ import numpy as np
 import store
 import markets
 
-CONDITION = {'Like new':None,'Excellent':None,'Good':None,'Fair':None,'Refurbished':None}
+CONDITION = {'Not verified':None,'Like new':None,'Excellent':None,'Good':None,'Fair':None,'Refurbished':None}
 
 def key(text):
     return re.sub(r'[\W_]+','-',text.casefold(),flags=re.UNICODE).strip('-')
@@ -48,6 +48,7 @@ def comparables(item,market='US',mode='exact',basis='item'):
                 row['age_days']=(datetime.now(timezone.utc)-stamp).total_seconds()/86400
                 if not 0<=row['age_days']<=7:reason=reason or 'Source observation is expired or has a future timestamp.'
             except (ValueError,KeyError,TypeError):reason=reason or 'Verification date is missing or invalid.'
+        if row.get('comparison_differences'):reason=reason or 'Source colour differs; reference only.'
         condition=row.get('condition','Unknown')
         if (item['condition']=='Refurbished')!=(condition=='Refurbished'):reason=reason or 'Refurbished retail and used inventory are separate condition classes.'
         if condition in ['Unknown','New']:reason=reason or 'Comparable pre-owned condition is not confirmed.'
@@ -87,6 +88,11 @@ def comparables(item,market='US',mode='exact',basis='item'):
     condition_references=[r['comparison_price'] for r in rows if r.get('exclusion_reason')=='Refurbished retail and used inventory are separate condition classes.' and r.get('comparison_price')]
     if condition_references:
         result['reference_band']={'low':min(condition_references),'median':float(np.median(condition_references)),'high':max(condition_references),'count':len(condition_references),'label':'Other-condition offers; not a direct valuation of this item.'}
+    import assessment
+    result['preliminary']=assessment.reference(item,result)
+    if item.get('category')=='Phone' and (assessment.uncertainties(item) or (result['preliminary'] and result['preliminary']['suggested_price'] is None)):
+        result['basis']='Complete the key phone checks before setting a single price. Current checked offers remain visible as references.'
+        return result
     if len(selected)<3 or len(pages)<3 or (verified and len(sellers)<2):return result
     counts={name:sum(seller(r)==name for r in selected) for name in sellers}
     weights=[math.exp(-min(r.get('age_days',0),365)/7)/counts[seller(r)] for r in selected]

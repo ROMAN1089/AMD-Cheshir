@@ -30,9 +30,8 @@ def shopify_evidence(document,item,fetch,allowed,match,condition_from):
     try: product=json.loads(response['text'])
     except ValueError:return [],['Public product response was not valid JSON.']
     if not isinstance(product,dict) or not isinstance(product.get('variants'),list):return [],[]
-    name=str(product.get('title','')); description=BeautifulSoup(str(product.get('description','')),'html.parser').get_text(' ',strip=True)
-    ok,reason=match(item,name,description)
-    if not ok:return [],[reason]
+    name=str(product.get('title','')); description=str(product.get('vendor',''))+' '+BeautifulSoup(str(product.get('description','')),'html.parser').get_text(' ',strip=True)
+    reason='Exact model and recorded configuration checked on the purchasable variant.'
     condition=condition_from('',name+' '+description[:2000])
     if condition in ['New','Unknown']:return [],['Pre-owned condition is not explicit in the primary product description.']
     rows=[]
@@ -44,7 +43,10 @@ def shopify_evidence(document,item,fetch,allowed,match,condition_from):
         if not 0<amount<=1_000_000_000:continue
         title=name+' · '+str(v.get('title','Default'))
         # Never convert RAM/storage from another variant into this variant's facts.
-        if not match(item,title,description)[0]:continue
+        # A sibling variant or related-product description cannot confirm this SKU's capacity.
+        variant_specs=' '.join([title,str(v.get('sku',''))])
+        strict_item={**item,'brand':'Unknown','specs':{k:val for k,val in item.get('specs',{}).items() if k in ['memory','storage']}}
+        if not match(item,title,description)[0] or not match(strict_item,title,variant_specs)[0]:continue
         offer_query=[(k,val) for k,val in parse_qsl(p.query) if k!='variant']+[('variant',str(v.get('id','')))]
         offer_url=urlunparse((p.scheme,p.netloc,p.path,p.params,urlencode(offer_query),''))
         rows.append(dict(title=title[:250],price=amount,currency=currency,market=market['code'],match_level=item.get('_research_mode','exact'),condition=condition,kind='asking',source='verified_web',verification='Public Shopify Product Ajax variant; page currency and product description cross-checked',url=document['url'],offer_url=offer_url,source_name=p.hostname,observed_at=response['fetched_at'],age_days=0,page_sha256=document['sha256'],api_sha256=response['sha256'],evidence={'product_title':name,'description_quote':description[:1600],'variant_title':v.get('title'),'variant_id':v.get('id'),'variant_sku':v.get('sku'),'price_minor_units':v['price'],'priceCurrency':currency,'available':v['available'],'product_api_url':api_url,'condition_basis':'Primary product title/description; cosmetic grade retained without numerical adjustment','metadata_conflict':'The page description says refurbished; a JSON-LD template also contains NewCondition.' if conflict else None},match_reason=reason,availability='InStock',model_key=item['model_key'],shipping='Shipping and taxes not verified',transaction_verified=False,source_grade=str(v.get('title',''))))

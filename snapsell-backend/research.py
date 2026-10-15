@@ -30,7 +30,7 @@ import browse
 
 executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='market-research')
 USER_AGENT='SnapSellResearch/1.0 (product price verification; no login or bot bypass)'
-MAX_BYTES=2_000_000
+MAX_BYTES=8_000_000
 _robots={}
 _robots_lock=threading.Lock()
 _queue_lock=threading.RLock()
@@ -149,6 +149,12 @@ def model_match(item,name,description=''):
     # A model key may omit generation; the recorded listing title must not.
     generations=re.findall(r'\bgen\d+\b',norm(item.get('title','')))
     if any(g not in tokens for g in generations): return False,'Product generation is not confirmed.'
+    if item.get('category')=='Phone':
+        wanted=norm(item.get('model_key','')+' '+item.get('title',''))
+        if 'iphone' in wanted:
+            for suffix in ['pro','max','plus','mini']:
+                if (suffix in wanted.split()) != (suffix in norm(name).split()):
+                    return False,'Different iPhone model variant (Pro/Max/Plus/Mini).'
     context=norm(name+' '+description)
     brand=item.get('brand','')
     if not unknown(brand) and not set(norm(brand).split()).issubset(set(context.split())):return False,'The recorded brand is not confirmed.'
@@ -174,7 +180,10 @@ def model_match(item,name,description=''):
                 capacity_pattern=r'(?<!\d)'+number_match[1]+r'\s*'+number_match[2]+r'(?![a-z0-9])'
                 if not re.search(capacity_pattern,context):
                     return False,f'The recorded {field} configuration is not confirmed on the page.'
-    for field in ['size','color','material']:
+    carrier=specs.get('carrier','')
+    if item.get('category')=='Phone' and carrier=='Unlocked' and 'unlocked' not in context.split():return False,'Unlocked carrier status is not confirmed for this offer.'
+    if item.get('category')=='Phone' and carrier=='Carrier locked' and ('unlocked' in context.split() or not re.search(r'\b(at t|verizon|t mobile|locked)\b',context)):return False,'Matching carrier-locked status is not confirmed.'
+    for field in (['size','material'] if item.get('_colour_reference') else ['size','color','material']):
         value=specs.get(field,'')
         if not unknown(value) and norm(value) and not set(norm(value).split()).issubset(set(context.split())):
             return False,f'The recorded {field} is not confirmed in the product evidence.'
@@ -224,6 +233,8 @@ def parse_offers(document,item):
         for product in walk_products(data):
             name=str(product.get('name',''))
             description=BeautifulSoup(str(product.get('description','')),'html.parser').get_text(' ',strip=True)[:4000]
+            brand=product.get('brand',{})
+            description+=' '+str(brand.get('name','') if isinstance(brand,dict) else brand)
             properties=product.get('additionalProperty',[])
             if isinstance(properties,dict):properties=[properties]
             if isinstance(properties,list):description+=' '+' '.join(str(p.get('name',''))+': '+str(p.get('value','')) for p in properties if isinstance(p,dict))
@@ -302,17 +313,45 @@ def parse_offers(document,item):
     row=rows[0];row.update(market=market['code'],match_level=item.get('_research_mode','exact'))
     return [row],[]
 
+
+def offers_from(document,item):
+    rows,reasons=parse_offers(document,item)
+    if not rows:
+        variants,notes=merchant.shopify_evidence(document,item,fetch,robots_allowed,model_match,condition_from)
+        if variants:rows=variants
+        else:reasons=list(dict.fromkeys(reasons+notes))
+    return rows,reasons
+
+def product_links(document,item):
+    """Follow bounded, same-origin product links actually present on a public page."""
+    soup=BeautifulSoup(document['text'],'html.parser');links=[]
+    host=urlparse(document['url']).hostname
+    for a in soup.find_all('a',href=True):
+        href=urljoin(document['url'],a['href'])
+        if urlparse(href).hostname!=host or not any(t in urlparse(href).path for t in ['/products/','/product/','/item/','/p/','/goods/','/collections/']):continue
+        if any(token in urlparse(href).path for token in ['starter-pack','connected-pack','bundle','accessories']):continue
+        href=urlunparse(urlparse(href)._replace(query='',fragment=''))
+        name=a.get_text(' ',strip=True)+' '+urlparse(href).path.replace('-',' ')
+        candidate={**item,'specs':{},'_colour_reference':True}
+        if not model_match(candidate,name,item.get('brand',''))[0]:continue
+        try:url=canonical(href)
+        except EvidenceError:continue
+        if url not in links:links.append(url)
+    links.sort(key=lambda u:('/products/' not in urlparse(u).path, 'unlocked' not in u))
+    return links[:8]
+
 def verify_url(url,item):
     try:
         url=canonical(url);market=markets.for_item(item)
         robots_allowed(url); document=fetch(url)
         if document['url']!=url:robots_allowed(document['url'])
-        rows,reasons=parse_offers(document,item)
-        if not rows:
-            variants,notes=merchant.shopify_evidence(document,item,fetch,robots_allowed,model_match,condition_from)
-            if variants:rows=variants
-            else:reasons=list(dict.fromkeys(reasons+notes))
-        return dict(url=document['url'],title=rows[0]['title'] if rows else urlparse(document['url']).hostname,status='verified' if rows else 'rejected',reason='Source-page price, currency, stock, condition and product match checked.' if rows else '; '.join(reasons),rows=rows,checked_at=document['fetched_at'])
+        rows,reasons=offers_from(document,item)
+        if not rows and item.get('category')=='Phone' and not unknown(item.get('specs',{}).get('color')):
+            rows,extra=offers_from(document,{**item,'_colour_reference':True})
+            for row in rows:row.update(comparison_differences=['Source colour differs or is not confirmed; compare the linked variant.'])
+            reasons=list(dict.fromkeys(reasons+extra))
+        links=product_links(document,item) if not rows else []
+        return dict(product_links=links,url=document['url'],title=rows[0]['title'] if rows else urlparse(document['url']).hostname,status='verified' if rows else 'rejected',reason='Source-page price, currency, stock, condition and product match checked.' if rows else '; '.join(reasons),rows=rows,checked_at=document['fetched_at'])
     except EvidenceError as exc: return dict(url=str(url)[:2000],status='rejected',reason=str(exc),rows=[],checked_at=store.now())
     except Exception: return dict(url=str(url)[:2000],status='rejected',reason='Source could not be verified; no price was accepted.',rows=[],checked_at=store.now())
 
@@ -329,7 +368,11 @@ def plan(item):
         except RuntimeError: pass
     broad=f'{base} {market["country_terms"]}'
     if broad not in queries: queries.append(broad)
-    return queries[:4],model
+    identity=' '.join(str(item.get(k,'')) for k in ['brand','model_key']).replace('-',' ')
+    if market['code']=='US' and item.get('category')=='Phone':
+        targeted=[f'{identity} {capacity} refurbished inurl:products (site:plug.tech OR site:loop-mobile.com)',f'{identity} {capacity} used unlocked buy product USD']
+        queries=targeted+queries
+    return list(dict.fromkeys(queries))[:6],model
 
 def discover(queries,exclude_hosts=None,limit=15,market='US'):
     from ddgs import DDGS
@@ -356,6 +399,7 @@ def discover(queries,exclude_hosts=None,limit=15,market='US'):
     finally:pool.shutdown(wait=False,cancel_futures=True)
     # Share the page budget across queries; a broad first query must not crowd out
     # targeted refinements that found a better independent merchant.
+    for group in groups:group.sort(key=lambda u:('/products/' not in urlparse(u).path, '/collections/' in urlparse(u).path))
     for rank in range(max([len(g) for g in groups] or [0])):
         for group in groups:
             if rank<len(group) and group[rank] not in urls:urls.append(group[rank])
@@ -416,6 +460,9 @@ def run(job_id):
         queries,model=plan(item)
         job.update(stage='Searching public web sources',queries=queries,planning_model=model); store.put('jobs',job)
         urls,notes=discover(queries,market=job.get('market','US'))
+        # Public catalogues are a fallback discovery path, never a source of numeric prices.
+        if item.get('category')=='Phone' and job.get('market','US')=='US' and 'iphone' in norm(item.get('model_key','')):
+            urls=['https://www.plug.tech/collections/apple-iphones','https://loop-mobile.com/collections/refurbished-iphones']+urls
         for url in job.get('source_urls',[]):
             u=canonical(url)
             if u not in urls: urls.insert(0,u)
@@ -425,6 +472,15 @@ def run(job_id):
         if job.get('market','US')=='US' and browse.configured():
             observations,sources=browse.collect(item)
         inspect_batch(urls,item,job,sources,observations)
+        linked=list(dict.fromkeys(u for source in sources for u in source.get('product_links',[]) if u not in urls))[:12]
+        if linked:
+            job.update(stage='Checking product variants',candidate_count=len(urls)+len(linked));store.put('jobs',job)
+            inspect_batch(linked,item,job,sources,observations,budget=65)
+            seen={s['url'] for s in sources}
+            children=list(dict.fromkeys(u for source in sources for u in source.get('product_links',[]) if u not in seen))[:12]
+            if children:
+                job.update(candidate_count=job['candidate_count']+len(children));store.put('jobs',job)
+                inspect_batch(children,item,job,sources,observations,budget=65)
         if len({r['source_name'] for r in observations})<3:
             job.update(stage='Looking for independent merchants',message='Adapting searches using the source rejection reasons.');store.put('jobs',job)
             retry_queries,blocked,retry_model=refine(item,sources)
@@ -454,6 +510,9 @@ def run(job_id):
                 caveats=synthesis.get('caveats',[])
                 job.update(caveats=[c[:400] for c in caveats if isinstance(c,str) and not re.search(r'\d|\$',c)][:5],summary_model=summary_model)
             except RuntimeError: pass
+        if job.get('fill_draft_price'):
+            import assessment
+            assessment.apply_draft_price(item['id'],job)
         store.put('jobs',job)
     except (EvidenceError,ValueError) as exc:
         job.update(status='failed',stage='Research needs attention',message=str(exc)); store.put('jobs',job)
@@ -461,7 +520,7 @@ def run(job_id):
         job.update(status='failed',stage='Research needs attention',message='Research could not finish. No unsupported price was accepted.'); store.put('jobs',job)
 
 @serialized_queue
-def start(item_id,source_urls=None,market='US',mode='exact'):
+def start(item_id,source_urls=None,market='US',mode='exact',fill_draft_price=False):
     markets.get(market)
     if mode not in ['exact','similar']:raise ValueError('Choose exact or similar matching.')
     item=store.get('items',item_id)
@@ -473,7 +532,7 @@ def start(item_id,source_urls=None,market='US',mode='exact'):
     version=fingerprint(item)
     current=latest(item_id,market,mode)
     if current and current['status'] in ['queued','processing'] and current.get('item_fingerprint')==version: return current
-    job=store.put('jobs',dict(id=str(uuid4()),type='market_research',item_id=item_id,market=market,mode=mode,item_fingerprint=version,status='queued',stage='Queued',message='Waiting to research public sources',created_at=store.now(),source_urls=source_urls or []))
+    job=store.put('jobs',dict(id=str(uuid4()),type='market_research',fill_draft_price=fill_draft_price,item_id=item_id,market=market,mode=mode,item_fingerprint=version,status='queued',stage='Queued',message='Waiting to research public sources',created_at=store.now(),source_urls=source_urls or []))
     executor.submit(run,job['id'])
     return job
 

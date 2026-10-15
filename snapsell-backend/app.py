@@ -25,6 +25,7 @@ import amd
 import commerce
 import video
 import research
+import assessment
 import markets
 import outcomes
 import deals
@@ -210,18 +211,21 @@ def observed_outcome(item_id):
     raise Invalid('Choose begin, or explicitly confirm that the item was unsold throughout its seven-day window.')
 
 @app.route('/api/items/<item_id>/research',methods=['GET','POST'])
+@ebay.serialized
 def research_item(item_id):
     item=item_or_404(item_id)
     if request.method=='GET':
         market=request.args.get('market','US');mode=request.args.get('mode','exact');basis=request.args.get('basis','item')
-        return jsonify(item=item,job=research.latest(item_id,market,mode),pricing=pricing.evaluate(item,market,mode,basis),schedule=research.schedule(item_id,market,mode),outcome_window=outcomes.current(item_id))
+        return jsonify(questions=assessment.questions(item),item=item,job=research.latest(item_id,market,mode),pricing=pricing.evaluate(item,market,mode,basis),schedule=research.schedule(item_id,market,mode),outcome_window=outcomes.current(item_id))
     d=body(); urls=d.get('source_urls',[])
     markets.get(d.get('market','US'))
     if d.get('mode','exact') not in ['exact','similar']:raise Invalid('Choose exact or similar product comparison.')
     if not isinstance(urls,list) or len(urls)>5 or any(not isinstance(u,str) for u in urls): raise Invalid('Provide at most five direct product URLs.')
     for u in urls: research.canonical(u)
+    if 'fill_draft_price' in d and not isinstance(d['fill_draft_price'],bool):raise Invalid('Draft price option must be true or false.')
+    if 'answers' in d:item=assessment.save_answers(item,d['answers'])
     if 'auto_refresh' in d:research.schedule(item_id,d.get('market','US'),d.get('mode','exact'),d['auto_refresh'],urls)
-    return jsonify(job=research.start(item_id,urls,d.get('market','US'),d.get('mode','exact'))),202
+    return jsonify(job=research.start(item_id,urls,d.get('market','US'),d.get('mode','exact'),fill_draft_price=d.get('fill_draft_price',False))),202
 
 @app.post('/api/items/<item_id>/research/schedule')
 def research_schedule(item_id):
@@ -249,7 +253,7 @@ def research_inventory():
 @app.route('/api/items',methods=['POST'])
 def create_item():
     d=body()
-    item=dict(id=str(uuid4()),title='New item',brand='Unknown',category='Other',model_key='unknown',condition='Good',specs={},subtitle='Seller inventory',description='',image='/assets/product.svg',price=0,cost=0,reserve=0,fee_rate=0,holding_cost=0,status='draft',confirmed=False,source='manual',created_at=store.now(),age_days=0,use_case='Everyday use')
+    item=dict(id=str(uuid4()),title='New item',brand='Unknown',category='Other',model_key='unknown',condition='Not verified',specs={},subtitle='Seller inventory',description='',image='/assets/product.svg',price=0,cost=0,reserve=0,fee_rate=0,holding_cost=0,status='draft',confirmed=False,source='manual',created_at=store.now(),age_days=0,use_case='Everyday use')
     item.update(validate_item(d))
     if item['category']=='Monitor': item['image']='/assets/monitor.svg'
     elif item['category']=='Laptop':item['image']='/assets/laptop-silver.svg'
@@ -292,7 +296,7 @@ def update_item(item_id):
     if item.get('image','').startswith('/assets/'):
         item['image']='/assets/monitor.svg' if item['category']=='Monitor' else '/assets/laptop-silver.svg' if item['category']=='Laptop' else '/assets/product.svg'
     item=store.put('items',item)
-    if research.fingerprint(item)!=previous and not research.unknown(item['model_key']): research.start(item_id)
+    if research.fingerprint(item)!=previous and not research.unknown(item['model_key']) and item['category']!='Phone': research.start(item_id)
     return jsonify(item)
 
 @app.post('/api/items/<item_id>/publish')

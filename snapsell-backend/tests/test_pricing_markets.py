@@ -33,9 +33,9 @@ def test_enabled_amd_outage_keeps_default_research_queries(item,monkeypatch,phas
     assert result[0] and result[-1] is None
 
 def test_supported_phone_research_can_set_asking_price(item,seller):
-    phone=store.put('items',{**item,'title':'Apple iPhone 16','brand':'Apple','model_key':'iphone-16','category':'Phone','price':0,'specs':{'storage':'128GB'}})
+    phone=store.put('items',{**item,'title':'Apple iPhone 16','brand':'Apple','model_key':'iphone-16','category':'Phone','price':0,'specs':{'storage':'128GB','battery':'87%','working':'Yes','repairs':'None','carrier':'Unlocked','activation_lock':'Removed'}})
     for index,price in enumerate([400,420,440]):
-        product={'@type':'Product','name':'Used Apple iPhone 16 128GB','offers':{'@type':'Offer','price':price,'priceCurrency':'USD','availability':'https://schema.org/InStock','itemCondition':'https://schema.org/UsedCondition'}}
+        product={'@type':'Product','name':'Used Apple iPhone 16 128GB Unlocked','offers':{'@type':'Offer','price':price,'priceCurrency':'USD','availability':'https://schema.org/InStock','itemCondition':'https://schema.org/UsedCondition'}}
         doc={'url':f'https://seller{index}.example/iphone-16','text':'<script type="application/ld+json">'+json.dumps(product)+'</script>','sha256':'fixture','fetched_at':store.now()}
         rows,_=research.parse_offers(doc,phone)
         assert rows
