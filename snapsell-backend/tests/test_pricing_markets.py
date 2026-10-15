@@ -4,6 +4,52 @@ import pytest
 from test_research import item,seller,isolated,document,app,store,research,pricing
 import browse,markets
 
+@pytest.mark.parametrize('market',['US','KZ','JP','CN'])
+@pytest.mark.parametrize('phase',['plan','refine'])
+def test_enabled_amd_receives_valid_query_prompt(item,monkeypatch,market,phase):
+    """Exercise the enabled-provider branch: disabled AMD hides f-string failures."""
+    import re
+    monkeypatch.setattr(app.amd,'configured',lambda:True)
+    received=[]
+    def answer(role,prompt,payload,budget):
+        schema=json.loads(re.search(r'Return JSON (\{.*?\})\.',prompt).group(1))
+        assert isinstance(schema['queries'],list) and all(isinstance(q,str) for q in schema['queries'])
+        assert markets.get(market)['name'] in prompt
+        received.append(prompt)
+        return {'queries':['Used Dell UltraSharp U2720Q local offers']},'mock-enabled-amd'
+    monkeypatch.setattr(app.amd,'json_response',answer)
+    target={**item,'_research_market':market}
+    if phase=='plan':
+        queries,model=research.plan(target)
+    else:
+        queries,blocked,model=research.refine(target,[])
+    assert received and queries and model=='mock-enabled-amd'
+
+@pytest.mark.parametrize('phase',['plan','refine'])
+def test_enabled_amd_outage_keeps_default_research_queries(item,monkeypatch,phase):
+    monkeypatch.setattr(app.amd,'configured',lambda:True)
+    monkeypatch.setattr(app.amd,'json_response',lambda *a:(_ for _ in ()).throw(RuntimeError('Provider unavailable')))
+    result=research.plan(item) if phase=='plan' else research.refine(item,[])
+    assert result[0] and result[-1] is None
+
+def test_supported_phone_research_can_set_asking_price(item,seller):
+    phone=store.put('items',{**item,'title':'Apple iPhone 16','brand':'Apple','model_key':'iphone-16','category':'Phone','price':0,'specs':{'storage':'128GB'}})
+    for index,price in enumerate([400,420,440]):
+        product={'@type':'Product','name':'Used Apple iPhone 16 128GB','offers':{'@type':'Offer','price':price,'priceCurrency':'USD','availability':'https://schema.org/InStock','itemCondition':'https://schema.org/UsedCondition'}}
+        doc={'url':f'https://seller{index}.example/iphone-16','text':'<script type="application/ld+json">'+json.dumps(product)+'</script>','sha256':'fixture','fetched_at':store.now()}
+        rows,_=research.parse_offers(doc,phone)
+        assert rows
+        store.put('comparables',{**rows[0],'id':str(index),'item_id':phone['id'],'item_fingerprint':research.fingerprint(phone)})
+    assert pricing.evaluate(phone)['comparables']['available']
+    response=seller.post('/api/items/'+phone['id']+'/strategy',json={'strategy':'balanced'})
+    assert response.status_code==200 and response.json['price']==420
+    assert store.get('items',phone['id'])['price']==420
+
+def test_missing_phone_evidence_cannot_write_a_guessed_price(item,seller):
+    phone=store.put('items',{**item,'title':'Apple iPhone 16','brand':'Apple','model_key':'iphone-16','category':'Phone','price':0})
+    response=seller.post('/api/items/'+phone['id']+'/strategy',json={'strategy':'balanced'})
+    assert response.status_code==400 and store.get('items',phone['id'])['price']==0
+
 def evidence(item,market='US',price=250,index=0,mode='exact',shipping=None):
     currency=markets.get(market)['currency'];suffix={'US':'example','KZ':'kz','JP':'jp','CN':'cn'}[market]
     product={'@type':'Product','name':'Used Dell UltraSharp U2720Q 27-inch monitor','description':'4K monitor','offers':{'@type':'Offer','price':price,'priceCurrency':currency,'availability':'https://schema.org/InStock','itemCondition':'https://schema.org/UsedCondition'}}
