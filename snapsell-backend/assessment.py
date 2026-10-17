@@ -124,7 +124,8 @@ def apply_draft_price(item_id,job):
         if not price:return
         floor=max(item.get('reserve',0),item.get('cost',0)/(1-item.get('fee_rate',0)))
         if price<floor or price>100000:return
-        item.update(price=price,price_assessment={'research_id':job['id'],'basis':'Observed market median' if selected else 'Preliminary merchant reference','preliminary':not bool(selected),'missing':uncertainties(item),'created_at':store.now()})
+        unverified=sorted({key for row in report.get('rows',[]) if row.get('included') for key in row.get('attribute_evidence',{}).get('unverified',[])})
+        item.update(price=price,price_assessment={'research_id':job['id'],'basis':'Observed market median' if selected else 'Preliminary merchant reference','preliminary':not bool(selected) or bool(unverified),'source_attributes_unverified':unverified,'missing':uncertainties(item),'created_at':store.now()})
         outcomes.invalidate(item_id);store.put('items',item)
         store.event(item_id,'price_change',before=0,after=price,model_source='verified_sources_preliminary' if not selected else 'observed_asking_prices')
         return item

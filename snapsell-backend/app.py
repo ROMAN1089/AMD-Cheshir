@@ -34,6 +34,8 @@ import google_calendar
 import channels
 import ebay
 import ebay_notifications
+import photos
+import maintenance
 from catalog import CATEGORIES
 
 app=Flask(__name__)
@@ -123,6 +125,21 @@ def error(exc):
 @app.get('/api/health')
 def health():
     return jsonify(status='healthy',amd_configured=amd.configured(),local_login=LOCAL_ACCESS and not os.getenv('SELLER_PASSWORD'),database='SQLite',market='US',currency='USD')
+
+@app.route('/api/maintenance',methods=['GET','POST'])
+@ebay.serialized
+def maintain_workspace():
+    import backups
+    if request.method=='GET':return jsonify(maintenance.status())
+    data=body()
+    if data.get('action')=='backup':
+        path=backups.create()
+        return jsonify(message='Private recovery backup created and checksums verified.',filename=path.name)
+    if data.get('action')=='cleanup' and data.get('confirm_remove_uploads') is True:
+        with _job_lock:
+            backup=backups.create()
+            return jsonify(**maintenance.cleanup(),backup=backup.name)
+    raise Invalid('Choose backup or explicitly confirm removal of finished video uploads.')
 
 @app.route('/api/session',methods=['GET','POST','DELETE'])
 def login():
@@ -314,8 +331,40 @@ def update_item(item_id):
     if item.get('image','').startswith('/assets/'):
         item['image']='/assets/monitor.svg' if item['category']=='Monitor' else '/assets/laptop-silver.svg' if item['category']=='Laptop' else '/assets/product.svg'
     item=store.put('items',item)
-    if research.fingerprint(item)!=previous and not research.unknown(item['model_key']) and item['category']!='Phone': research.start(item_id)
+    if research.fingerprint(item)!=previous:
+        item.pop('price_assessment',None);item=store.put('items',item)
+        if not research.unknown(item['model_key']) and item['category']!='Phone':research.start(item_id)
     return jsonify(item)
+
+@app.route('/api/items/<item_id>/photos',methods=['GET','POST','PATCH'])
+@ebay.serialized
+def product_photos(item_id):
+    item=item_or_404(item_id)
+    if request.method=='GET':
+        return jsonify(photos=photos.gallery(item),candidates=photos.candidates(item))
+    if item['status'] in ['sold','sale_pending','archived']:
+        raise Invalid('Photos cannot change for a sold, reserved or archived item.')
+    if request.method=='POST':
+        upload=request.files.get('photo')
+        if not upload:raise Invalid('Choose a product photo.')
+        updated=photos.add(item,upload.stream.read(photos.LIMIT+1))
+    else:updated=photos.edit(item,body())
+    outcomes.invalidate(item_id)
+    return jsonify(updated)
+
+@app.post('/api/items/<item_id>/archive')
+@ebay.serialized
+def archive_item(item_id):
+    item=item_or_404(item_id);data=body()
+    if data.get('restore') is True:
+        item.pop('archived_at',None)
+    else:
+        active=any(a.get('type')=='external_listing' and a.get('item_id')==item_id and a.get('status') in ['posted','needs_removal','sale_detected','publishing'] for a in store.all_rows('actions'))
+        meetings=any(a.get('item_id')==item_id and a.get('status') in ['booked','confirmed','scheduled'] for a in store.all_rows('appointments'))
+        if active or meetings or item['status']=='sale_pending':raise Invalid('Resolve active listings and pickup appointments before archiving this item.')
+        item['archived_at']=store.now()
+        outcomes.invalidate(item_id,'Item archived.')
+    return jsonify(store.put('items',item))
 
 @app.post('/api/items/<item_id>/publish')
 @ebay.serialized
@@ -404,7 +453,8 @@ def save_external_listing(item_id,name):
 def record_external_sale(item_id):
     d=body();item_or_404(item_id)
     if d.get('confirm_completed') is not True:raise Invalid('Confirm the external transaction is complete.')
-    return jsonify(channels.complete_sale(item_id,str(d.get('listing_id','')),number(d.get('amount'),'Sale price',.01),number(d.get('fee'),'Actual fee paid',0),number(d.get('cost'),'Acquisition cost',0)))
+    expenses={key:number(d.get(key,0),key) for key in ['shipping','packaging','repairs','taxes','labor','refunds']}
+    return jsonify(channels.complete_sale(item_id,str(d.get('listing_id','')),number(d.get('amount'),'Sale price',.01),number(d.get('fee'),'Actual fee paid',0),number(d.get('cost'),'Acquisition cost',0),expenses))
 
 @app.post('/api/channels/listings/<listing_id>/removed')
 def confirm_external_removal(listing_id):
@@ -435,9 +485,12 @@ def confirm_listing_facts(item_id):
 def strategy(item_id):
     item=item_or_404(item_id)
     if item['status']=='sold': raise Invalid('This item has already sold.')
-    selected=next((s for s in pricing.evaluate(item)['strategies'] if s['id']==body().get('strategy')),None)
+    report=pricing.evaluate(item)
+    selected=next((s for s in report['strategies'] if s['id']==body().get('strategy')),None)
     if not selected: raise Invalid('No supported recommendation. Import exact-model comparables first.')
     before=item['price']; item.update(price=selected['price'],strategy=selected['id'])
+    unverified=report['comparables'].get('unit_attributes_unverified',[])
+    item['price_assessment']={'basis':'Observed asking-price position','preliminary':bool(unverified),'source_attributes_unverified':unverified,'created_at':store.now()}
     if before!=item['price']:outcomes.invalidate(item_id)
     model=pricing.fit_model()
     store.put('items',item); store.event(item_id,'price_change',before=before,after=item['price'],model_source=model[2]['source'] if model else 'observed_asking_prices')
@@ -486,6 +539,7 @@ def retry(job_id):
         job=store.get('jobs',job_id)
         if not job: raise Invalid('Upload not found.')
         if job['status'] not in ['failed','awaiting_key']: raise Invalid('Only failed or pending-key uploads can be retried.')
+        if job.get('upload_removed') or not Path(job.get('path','')).is_file():raise Invalid('The original upload was cleaned up. Upload the video again, or restore it from your recovery backup.')
         if not amd.configured(): raise Invalid('Add your AMD key before retrying.')
         job.update(status='queued',message='Queued for another extraction'); store.put('jobs',job)
         video.executor.submit(video.run,job_id)
@@ -606,6 +660,8 @@ def media(filename):
 
 if __name__=='__main__':
     from waitress import serve
+    import backups
+    backups.daily()
     ebay.start_worker()
     research.start_worker()
     google_calendar.start_worker()

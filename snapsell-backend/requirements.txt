@@ -9,3 +9,4 @@ ddgs==9.16.0
 beautifulsoup4==4.14.3
 faster-whisper==1.2.1
 cryptography==46.0.3
+Pillow==13.0.0

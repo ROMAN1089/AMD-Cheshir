@@ -7,7 +7,7 @@ import io,json,zipfile,hashlib,html,re
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
-import store,pricing,commerce,amd,faults
+import store,pricing,commerce,amd,faults,photos
 
 PLATFORMS={
  'ebay':{'name':'eBay','url':'https://www.ebay.com/sl/sell','mode':'listing_kit','integration':'Seller API authorization and listing policies required for direct publishing.','hosts':['ebay.com'],'title_limit':80},
@@ -20,7 +20,7 @@ def platform(name):
  return PLATFORMS[name]
 
 def version(item):
- return hashlib.sha256(json.dumps({k:item.get(k) for k in ['title','description','category','condition','specs','price','image','confirmed']},sort_keys=True).encode()).hexdigest()
+ return hashlib.sha256(json.dumps({k:item.get(k) for k in ['title','description','category','condition','specs','price','image','photos','confirmed']},sort_keys=True).encode()).hexdigest()
 
 def prepare(item,name):
  destination=platform(name);report=pricing.evaluate(item)
@@ -44,6 +44,7 @@ def prepare(item,name):
   path=(store.DATA/'media'/image.removeprefix('/media/')).resolve()
   if path.is_relative_to((store.DATA/'media').resolve()) and path.is_file():photo=path
  missing=[]
+ if item.get('archived_at'):missing.append('Restore this archived item before preparing a new listing.')
  if item['status'] in ['sold','sale_pending']:missing.append('This item has sold or has an eBay sale awaiting confirmation; do not post another listing.')
  if not item.get('confirmed'):missing.append('Review and confirm product facts.')
  if price is None:missing.append('Choose a price or gather enough matching market evidence.')
@@ -51,6 +52,7 @@ def prepare(item,name):
  if photo is None:missing.append('Add a real product photo on the marketplace; the placeholder is not exported.')
  kit={'item_id':item['id'],'platform':name,'platform_name':destination['name'],'title':title,'description':text.strip(),'price_usd':price,'price_source':price_source,'condition':'For parts / not working' if fault_profile['faulty'] else item['condition'],'fault_profile':fault_profile,'category_hint':item['category'],'photo_available':photo is not None,'ready_for_manual_posting':not missing,'missing':missing,'open_url':destination['url'],'integration':destination['integration'],'listing_version':version(item),'publication_status':'not_published'}
  kit['price_evidence']={'basis':report['comparables']['basis'],'confidence':report['comparables'].get('confidence'),'sources':[{k:r.get(k) for k in ['title','price','condition','url','source_name','observed_at','included','exclusion_reason']} for r in report['comparables'].get('rows',[])]}
+ kit['photos']=photos.gallery(item)
  if name=='ebay':
   aspects={k.replace('_',' ').title():[str(v)] for k,v in item.get('specs',{}).items() if v and 'not verified' not in str(v).lower()}
   kit['ebay_draft']={'sku':'snapsell-'+item['id'],'inventory_item':{'availability':{'shipToLocationAvailability':{'quantity':1}},'product':{'title':title,'description':text.strip(),'aspects':aspects,'imageUrls':[]}},'offer':{'marketplaceId':'EBAY_US','format':'FIXED_PRICE','availableQuantity':1,'listingDescription':'<p>'+html.escape(text.strip()).replace('\n','<br>')+'</p>',**({'pricingSummary':{'price':{'value':f'{price:.2f}','currency':'USD'}}} if price is not None else {})},'required_before_api_publish':['Seller OAuth authorization','eBay leaf category ID and category-specific item aspects','Category-supported inventory condition','Public product photo URL','Inventory location','Fulfillment, payment and return business policy IDs']}
@@ -63,6 +65,9 @@ def bundle(item,name):
   archive.writestr('title.txt',kit['title']);archive.writestr('description.txt',kit['description'])
   if kit['price_usd'] is not None:archive.writestr('price.txt',f'{kit["price_usd"]:.2f} USD')
   if photo:archive.write(photo,'photo'+photo.suffix.lower())
+  for index,url in enumerate(photos.gallery(item)[1:],2):
+   try:archive.write(photos.path_for(url),f'photo-{index}.jpg')
+   except ValueError:continue
   archive.writestr('POSTING_GUIDE.txt',f'{kit["platform_name"]} listing kit\n\nOpen: {kit["open_url"]}\n\n{kit["integration"]}\nReview the title, description, price, photos and platform-specific required fields before posting. Downloading this kit does not publish anything.\n\n'+('\n'.join(kit['missing']) or 'Prepared for manual transfer.')+'\n\nAfter posting, save the live listing URL in SnapSell. Mark a sale only after the external transaction is complete.\n')
  return data.getvalue(),kit
 
@@ -82,6 +87,7 @@ def record_listing(item,name,url):
  patterns={'ebay':r'^/itm/(?:[^/]+/)?\d+(?:/|$)','facebook':r'^/marketplace/item/\d+(?:/|$)','craigslist':r'/\d+\.html$'}
  if not re.search(patterns[name],p.path):raise ValueError('Use the actual item listing URL, not a marketplace homepage or profile.')
  if item['status'] in ['sold','sale_pending']:raise ValueError('This item is sold or has a sale awaiting confirmation.')
+ if item.get('archived_at'):raise ValueError('Restore this item before recording a listing.')
  if not item.get('confirmed'):raise ValueError('Review the product facts before recording its listing.')
  kit,_=prepare(item,name)
  if kit['price_usd'] is not None and item['price']<=0:item['price']=kit['price_usd']
@@ -97,13 +103,14 @@ def record_listing(item,name,url):
   db.execute('INSERT INTO actions(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body',(row['id'],json.dumps(row)))
  return row
 
-def complete_sale(item_id,listing_id,amount,fee,cost):
+def complete_sale(item_id,listing_id,amount,fee,cost,expenses=None):
+ expenses=expenses or {}
  with store.connection() as db:
   db.execute('BEGIN IMMEDIATE')
   row=db.execute('SELECT body FROM items WHERE id=?',(item_id,)).fetchone();item=json.loads(row['body']) if row else None
   row=db.execute('SELECT body FROM actions WHERE id=?',(listing_id,)).fetchone();listing=json.loads(row['body']) if row else None
   if not item or item['status']=='sold' or not listing or listing.get('type')!='external_listing' or listing['item_id']!=item_id or listing.get('status') not in ['posted','sale_detected']:raise ValueError('Record an active external listing or detected eBay sale before recording its completed sale.')
-  economics={'cost':cost,'fee_amount':fee,'net_contribution':round(amount-fee-cost,2)}
+  economics={'cost':cost,'fee_amount':fee,**expenses,'net_contribution':round(amount-fee-cost-sum(expenses.values()),2)}
   order={'id':str(uuid4()),'item_id':item_id,'status':'completed','amount':amount,'platform':listing['platform'],'listing_url':listing['url'],'source':'seller_reported','economics':economics,'completed_at':store.now()}
   if listing.get('environment'):order['environment']=listing['environment']
   item.update(status='sold',sold_price=amount,sold_at=store.now());listing.update(status='sold',sold_at=store.now())

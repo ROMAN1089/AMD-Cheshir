@@ -1,3 +1,5 @@
+> October 17 update: product photo uploads/crops/frame selection, safe editor saves, item archive, expanded recorded expenses, private recovery/cleanup and CI acceptance checks. See [release readiness](docs/READINESS.md) and [current validation](docs/VALIDATION.md). Live eBay/Google checks still require seller credentials.
+
 # SnapSell — подготовьте один раз, продавайте на ваших площадках
 
 SnapSell превращает видео с инвентаризацией в проверенные объявления для перепродажи, исследует рыночные цены и готовит материалы для **eBay, Facebook Marketplace и Craigslist**. Покупатели и платежи остаются на самих торговых площадках.

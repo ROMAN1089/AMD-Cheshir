@@ -1,3 +1,18 @@
+# Current validation — October 17, 2026
+
+- Backend: 280 isolated behavioral tests, including photo decode/crop/export, unowned source rejection, archive guards, complete manual-to-marketplace-kit-to-recorded-sale workflow, actual expense accounting, repeated-sale rejection, consistent backup/restore and protected cleanup. Fixture prices exist only in disposable test databases.
+- Notification receiver: five worker tests. Production frontend build includes TypeScript checking.
+- Live AMD: authenticated connectivity call returned HTTP 200 using DeepSeek-V4-Flash on this installation. No seller item was changed by this check.
+- Local browser review: actual existing item opens the photo editor, saved video frames and crop controls. The real inventory is retained. Mobile dialog stacking and Escape protection were corrected after review.
+- Browser acceptance tests and GitHub Actions are now included. Their execution status must be checked separately; adding tests is not evidence that a remote CI run passed.
+- The current eBay Sandbox settings are missing client_id/client_secret/runame; Google is missing client_id/client_secret. Neither seller account is connected. No real marketplace publication, payment or Google event was executed in this pass.
+
+Current release scope, recovery instructions and remaining external checks: [READINESS.md](READINESS.md).
+
+---
+
+## Historical October 14 baseline (not the current release test count)
+
 # Validation — October 14, 2026
 
 ## Completed checks

@@ -9,6 +9,7 @@ import numpy as np
 import store
 import markets
 import faults
+import attribute_evidence
 
 CONDITION = {'Not verified':None,'For parts / not working':None,'Damaged / faulty':None,'Like new':None,'Excellent':None,'Good':None,'Fair':None,'Refurbished':None}
 
@@ -37,6 +38,9 @@ def comparables(item,market='US',mode='exact',basis='item'):
     def seller(row):return row.get('seller_id') or str(row.get('source_name') or 'Seller import').casefold().removeprefix('www.')
     for row in rows:
         reason=None
+        row['attribute_evidence']=attribute_evidence.audit(item,row)
+        if row['attribute_evidence']['conflicts']:
+            reason='Source unit attributes conflict: '+', '.join(row['attribute_evidence']['conflicts'])+'.'
         if mode=='exact' and unknown(item.get('model_key')):reason='Confirm an exact model before using exact-model valuations.'
         elif row.get('market','US')!=market or row.get('currency','USD')!=currency:reason='Different research market or currency.'
         elif row.get('match_level','exact')!=mode:reason='Different product matching mode.'
@@ -94,6 +98,7 @@ def comparables(item,market='US',mode='exact',basis='item'):
         result['reference_band']={'low':min(condition_references),'median':float(np.median(condition_references)),'high':max(condition_references),'count':len(condition_references),'label':'Other-condition offers; not a direct valuation of this item.'}
     import assessment
     result['preliminary']=assessment.reference(item,result)
+    result['unit_attributes_unverified']=sorted({key for row in selected for key in row.get('attribute_evidence',{}).get('unverified',[])})
     fault_profile=faults.profile(item)
     result['assessment']={'fault_profile':fault_profile,'message':'Describe the current fault or choose its type; research now searches damaged whole items.' if fault_profile['faulty'] and not fault_profile['types'] else 'Research compares the same disclosed fault type; working-device offers are excluded.' if fault_profile['faulty'] else 'Current operation is separate from repair history. Unknown battery health limits confidence, not whether the item can be listed.'}
     if item.get('category')=='Phone' and (any(k in assessment.uncertainties(item) for k in ['storage','working']) or (result['preliminary'] and result['preliminary']['suggested_price'] is None)):
@@ -106,6 +111,9 @@ def comparables(item,market='US',mode='exact',basis='item'):
     band=dict(low=round(quantile(values,weights,.25),2),median=round(quantile(values,weights,.5),2),high=round(quantile(values,weights,.75),2))
     stamps=[datetime.fromisoformat(r['observed_at']) for r in selected if r.get('source') in ['verified_web','verified_api']]
     result.update(**band,effective_samples=round(effective,1),domain_count=len(sellers),confidence='Moderate' if verified and effective>=8 and len(sellers)>=3 else 'Low',kind='asking',expires_at=(min(stamps)+timedelta(days=7)).isoformat() if stamps else None)
+    if result['unit_attributes_unverified']:
+        result['confidence']='Preliminary'
+        result['basis']+=' Source pages do not establish these unit facts: '+', '.join(result['unit_attributes_unverified'])+'. No numerical adjustment is assumed.'
     if mode=='similar':
         result.update(reference_band={**band,'count':len(selected),'label':'Similar-product asking-price reference; exact model is unconfirmed.'},basis='Similar offers only. This is not an exact-model valuation and cannot set a listing price automatically.')
     else:result['available']=True

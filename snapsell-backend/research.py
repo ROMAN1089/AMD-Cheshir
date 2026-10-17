@@ -542,6 +542,7 @@ def start(item_id,source_urls=None,market='US',mode='exact',fill_draft_price=Fal
     if mode not in ['exact','similar']:raise ValueError('Choose exact or similar matching.')
     item=store.get('items',item_id)
     if not item:return None
+    if item.get('archived_at'):raise ValueError('Restore this item before researching its price.')
     if unknown(item.get('model_key')) and mode=='exact':
         if market!='US':raise EvidenceError('Confirm the exact model or use similar-product references. Photo identity lookup currently searches US sources.')
         import identity
@@ -572,7 +573,7 @@ def refresh_due():
     for record in store.all_rows('actions'):
         if record.get('type')!='research_schedule' or not record.get('enabled') or time.time()<record.get('next_at',0):continue
         item=store.get('items',record['item_id'])
-        if not item or item.get('status') in ['sold','sale_pending']:continue
+        if not item or item.get('archived_at') or item.get('status') in ['sold','sale_pending']:continue
         record['next_at']=time.time()+86400;store.put('actions',record)
         try:
             job=start(item['id'],record.get('source_urls',[]),record['market'],record['mode'])

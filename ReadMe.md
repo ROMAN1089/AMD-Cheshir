@@ -1,3 +1,5 @@
+> October 17 update: product photo uploads/crops/frame selection, safe editor saves, item archive, expanded recorded expenses, private recovery/cleanup and CI acceptance checks. See [release readiness](docs/READINESS.md) and [current validation](docs/VALIDATION.md). Live eBay/Google checks still require seller credentials.
+
 # SnapSell — prepare once, sell on your marketplaces
 
 SnapSell turns an inventory video into reviewed resale listings, researches asking prices, and prepares materials for **eBay, Facebook Marketplace and Craigslist**. Buyers and payments stay on those marketplaces.
@@ -91,3 +93,5 @@ The repository's earlier CHESHIRE concept is preserved in [docs/CHESHIRE_CONCEPT
 Price research now offers US/USD, Kazakhstan/KZT, Japan/JPY and China/CNY selectors, separate similar-product references, source-backed delivery comparisons and opt-in daily refresh. Foreign estimates never overwrite USD inventory accounting. Optional eBay Browse research and explicit seven-day outcome collection are documented in [price research](docs/PRICE_RESEARCH.md). Regional live coverage and credentialed Browse calls have not been established by the isolated tests.
 
 Google Calendar can be connected from Deals: primary-calendar availability checks, automatic pickup event creation and updates, durable retries, and popup reminders. Configure a Web OAuth client and authorize your account using [the Google Calendar guide](docs/GOOGLE_CALENDAR.ru.md). External-calendar edits do not update local meetings. The local Google account was connected and live availability reads plus temporary event creation, rescheduling and cancellation were verified; this does not establish eBay publication or production Google OAuth verification.
+
+The repository's earlier CHESHIRE concept is preserved in [docs/CHESHIRE_CONCEPT.md](docs/CHESHIRE_CONCEPT.md).

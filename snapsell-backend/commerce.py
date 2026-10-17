@@ -8,7 +8,7 @@ import store
 def recommend(item,budget=None):
     result=[]
     for other in store.all_rows('items'):
-        if other['id']==item['id'] or other['status']!='listed' or other['category']==item['category']: continue
+        if other.get('archived_at') or other['id']==item['id'] or other['status']!='listed' or other['category']==item['category']: continue
         if {item['category'],other['category']}!={'Laptop','Monitor'}:continue
         if budget and other['price']+item['price']>budget: continue
         laptop=item if item['category']=='Laptop' else other
@@ -67,7 +67,7 @@ def counts(item_id,source=None):
 def actions():
     result=[]
     for item in store.all_rows('items'):
-        if item['status']!='listed': continue
+        if item.get('archived_at') or item['status']!='listed': continue
         e=store.events(item['id']); stats=counts(item['id']); questions=Counter()
         external_questions=[a for a in store.all_rows('actions') if a.get('type')=='reply_draft' and a.get('item_id')==item['id']]
         for question in external_questions:
@@ -97,4 +97,4 @@ def analytics():
         c=Counter(e['kind'] for e in events)
         return dict(views=c['view'],inquiries=c['inquiry'],offers=c['offer'],sales=c['sale'])
     external=[a for a in store.all_rows('actions') if a.get('type')=='reply_draft']
-    return dict(revenue=round(revenue,2),net_contribution=round(contribution,2),inventory_value=round(sum(i['price'] for i in items if i['status']=='listed'),2),active_count=sum(i['status']=='listed' for i in items),draft_count=sum(i['status']=='draft' for i in items),recorded_questions=len(external)+len([e for e in live if e['kind']=='inquiry']),completed_sales=len(orders),live=funnel(live),external=funnel([e for e in ev if e['source']=='seller_reported']),synthetic=funnel(demo),items=[dict(id=i['id'],title=i['title'],status=i['status'],price=i['price'],age_days=i.get('age_days',0),live=dict(counts(i['id'],'live')),synthetic=dict(counts(i['id'],'synthetic'))) for i in items],note='Net contribution deducts recorded acquisition cost and marketplace fee; it excludes taxes, labor, shipping and refunds. Sales are seller-confirmed deals; no payment is processed.')
+    return dict(revenue=round(revenue,2),net_contribution=round(contribution,2),inventory_value=round(sum(i['price'] for i in items if i['status']=='listed' and not i.get('archived_at')),2),active_count=sum(i['status']=='listed' and not i.get('archived_at') for i in items),draft_count=sum(i['status']=='draft' and not i.get('archived_at') for i in items),recorded_questions=len(external)+len([e for e in live if e['kind']=='inquiry']),completed_sales=len(orders),live=funnel(live),external=funnel([e for e in ev if e['source']=='seller_reported']),synthetic=funnel(demo),items=[dict(id=i['id'],title=i['title'],status=i['status'],price=i['price'],age_days=i.get('age_days',0),live=dict(counts(i['id'],'live')),synthetic=dict(counts(i['id'],'synthetic'))) for i in items],note='Net contribution deducts recorded acquisition cost, fees and any recorded shipping, packaging, repair, tax, labor and refund expenses. Unrecorded costs are excluded. Sales are seller-confirmed deals; no payment is processed.')

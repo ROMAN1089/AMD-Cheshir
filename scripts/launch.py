@@ -18,6 +18,9 @@ FRONTEND = ROOT / 'snapsell-frontend'
 PRIVATE = ROOT / 'private'
 URL = 'http://127.0.0.1:3000'
 PYTHON = ROOT / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
+if not PYTHON.is_file():
+    existing=ROOT.parents[1]/'work/venv'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
+    if existing.is_file():PYTHON=existing
 NEXT = FRONTEND / 'node_modules/next/dist/bin/next'
 
 def node_path():
@@ -29,11 +32,11 @@ def node_path():
     raise RuntimeError('Node.js is missing. Install Node.js 22+ or set SNAPSELL_NODE to node.exe.')
 
 def check_environment():
-    if not (ROOT/'.env').is_file(): raise RuntimeError('Missing .env. Copy .env.example to .env and configure it first.')
+    if not (ROOT/'.env').is_file() and not (ROOT.parents[1]/'work/amd.env').is_file(): raise RuntimeError('Missing .env. Copy .env.example to .env and configure it first.')
     if not PYTHON.is_file(): raise RuntimeError('Missing .venv. Follow Local setup in ReadMe.md.')
     if not NEXT.is_file(): raise RuntimeError('Frontend packages are missing. Run pnpm --dir snapsell-frontend install --frozen-lockfile.')
     # Use the venv interpreter explicitly, even when launch.py was called elsewhere.
-    result = subprocess.run([str(PYTHON), '-c', 'import flask, requests, dotenv, waitress, cryptography, cv2, numpy, ddgs, bs4, faster_whisper, imageio_ffmpeg'],
+    result = subprocess.run([str(PYTHON), '-c', 'import flask, requests, dotenv, waitress, cryptography, cv2, numpy, ddgs, bs4, faster_whisper, imageio_ffmpeg, PIL'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **hidden())
     if result.returncode: raise RuntimeError('Backend packages are missing. Run .venv\\Scripts\\python -m pip install -r snapsell-backend/requirements.txt.')
     node = node_path()

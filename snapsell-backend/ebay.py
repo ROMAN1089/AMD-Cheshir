@@ -240,6 +240,7 @@ def check(item_id):
 
 
 def payloads(item,data):
+    if item.get('archived_at'):raise ValueError('Restore this item before publishing on eBay.')
     if not isinstance(data,dict):raise ValueError('eBay settings must be an object.')
     kit,photo=channels.prepare(item,'ebay')
     if item['status'] in ['sold','sale_pending']:raise ValueError('This item has sold or has an eBay sale awaiting confirmation.')

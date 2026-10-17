@@ -21,3 +21,12 @@ private/
 client_secret*.json
 .google-calendar.token
 .google-calendar.tmp
+
+playwright-report/
+test-results/
+
+*.tsbuildinfo
+*.sqlite3*
+.session-secret
+research-workspace.jpg
+general-products.jpg

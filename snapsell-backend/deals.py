@@ -72,6 +72,7 @@ def book(data):
     with store.connection() as db:
         db.execute('BEGIN IMMEDIATE')
         item = find(db,'items',str(data.get('item_id','')))
+        if item.get('archived_at'):raise ValueError('Restore this item before arranging pickup.')
         if not item.get('confirmed'): raise ValueError('Review the item facts before arranging pickup.')
         if any(a['item_id']==item['id'] and a['status'] in ACTIVE | {'picked_up'} for a in rows(db,'appointments')):
             raise ValueError('This item already has a meeting or a recorded pickup.')

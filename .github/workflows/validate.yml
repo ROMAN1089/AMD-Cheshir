@@ -1,0 +1,39 @@
+name: Validate SnapSell
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: snapsell-backend/requirements.txt
+      - run: python -m pip install -r snapsell-backend/requirements.txt pytest
+      - run: python -m pytest snapsell-backend/tests -q
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --global pnpm@10.12.1
+      - run: pnpm install --frozen-lockfile
+        working-directory: snapsell-frontend
+      - run: pnpm build
+        working-directory: snapsell-frontend
+      - run: node --test deploy/ebay-notifications/worker.test.mjs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: snapsell-backend/requirements.txt
+      - run: python -m pip install -r snapsell-backend/requirements.txt
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: snapsell-frontend
+      - run: pnpm exec playwright test
+        working-directory: snapsell-frontend
