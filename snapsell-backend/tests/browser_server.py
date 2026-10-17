@@ -4,7 +4,8 @@ from pathlib import Path
 import sys
 import tempfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-os.environ.update(DATA_DIR=tempfile.mkdtemp(prefix='snapsell-browser-'),LOCAL_ACCESS='true',SELLER_PASSWORD='snapsell-local')
+os.environ.update(DATA_DIR=tempfile.mkdtemp(prefix='snapsell-browser-'),LOCAL_ACCESS='true')
+os.environ.pop('SELLER_PASSWORD',None)
 import app
 app.amd.configured=lambda:False
 app.research.start=lambda *args,**kwargs:None

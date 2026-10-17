@@ -92,6 +92,7 @@
     "snapsell-frontend\\src\\components\\PhotoEditor.tsx",
     "snapsell-frontend\\src\\components\\ResearchPanel.tsx",
     "snapsell-frontend\\tests\\browser\\seller.spec.ts",
+    "snapsell-frontend\\tests\\browser\\server.mjs",
     "snapsell-frontend\\tsconfig.json",
     "upstream\\.gitignore",
     "upstream\\LICENSE",
