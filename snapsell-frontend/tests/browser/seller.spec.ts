@@ -42,3 +42,13 @@ test('mobile dialog covers navigation and protects edits on Escape',async({page}
  const layers=await page.evaluate(()=>({modal:Number(getComputedStyle(document.querySelector('.modal-backdrop')!).zIndex),nav:Number(getComputedStyle(document.querySelector('.sidebar')!).zIndex)}));
  expect(layers.modal).toBeGreaterThan(layers.nav);
 });
+
+test('AMD dashboard shows observed work without manufacturing a live connection',async({page})=>{
+ await page.goto('/');await page.getByRole('button',{name:'Open seller workspace',exact:true}).click();
+ await page.getByRole('button',{name:'Research & AMD',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'See the work behind each listing.',exact:true})).toBeVisible();
+ await expect(page.getByText('WEB + LOCAL MATH',{exact:true})).toBeVisible();
+ await expect(page.getByText('Connect your AMD key',{exact:true})).toBeVisible();
+ const compute=await (await page.request.get('/api/compute')).json();
+ expect(compute.connection).toBe('not_configured');expect(compute.requests).toBe(0);
+});

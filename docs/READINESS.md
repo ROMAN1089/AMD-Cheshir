@@ -32,3 +32,7 @@ Restore with `python scripts/backup.py --restore ARCHIVE.zip --to NEW_RECOVERY_D
 ## Local verification
 
 See VALIDATION.md for current test results and the distinction between local deterministic tests, live AMD calls, local browser checks and unperformed external account operations. No diagnostic listings, fake sales or fixture prices are inserted into the actual workspace.
+
+## AMD optimization follow-up
+
+See [AMD_PIPELINE.md](AMD_PIPELINE.md) for routing, scheduler/cache behavior, measured diagnostics and current live vision-provider limitations. Saved-frame seller recovery works independently of successful AI recognition. Current deterministic test counts are in VALIDATION.md.

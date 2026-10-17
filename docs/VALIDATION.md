@@ -1,3 +1,12 @@
+# Current AMD optimization validation — October 17, 2026
+
+- Backend: 300 isolated behavioral tests. New coverage checks concurrent request capacity, shared pacing/cooldown, non-retryable authentication, model modalities, one-hop vision fallback, non-reasoning mode, intent cache key isolation, changed product facts, explicit battery-topic protection, accounting for invalid model output, observed connectivity, lossless duplicate-frame selection, safe saved-frame reuse and idempotent seller recovery from failed captures.
+- Frontend production build and TypeScript validation passed locally. Chromium acceptance coverage now also includes the AMD compute dashboard without falsely reporting connectivity when no key exists. Read the corresponding GitHub Actions run for remote execution status.
+- Live intent/cache and visual-model diagnostics, including failures, are documented in [AMD_PIPELINE.md](AMD_PIPELINE.md). No overall end-to-end vision speedup or new real-market forecasting accuracy is claimed.
+- Existing 280-test release results below are historical. External eBay/Google account requirements remain unchanged.
+
+---
+
 # Current validation — October 17, 2026
 
 - Backend: 280 isolated behavioral tests, including photo decode/crop/export, unowned source rejection, archive guards, complete manual-to-marketplace-kit-to-recorded-sale workflow, actual expense accounting, repeated-sale rejection, consistent backup/restore and protected cleanup. Fixture prices exist only in disposable test databases.

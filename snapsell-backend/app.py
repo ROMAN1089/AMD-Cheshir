@@ -36,6 +36,7 @@ import ebay
 import ebay_notifications
 import photos
 import maintenance
+import compute
 from catalog import CATEGORIES
 
 app=Flask(__name__)
@@ -125,6 +126,10 @@ def error(exc):
 @app.get('/api/health')
 def health():
     return jsonify(status='healthy',amd_configured=amd.configured(),local_login=LOCAL_ACCESS and not os.getenv('SELLER_PASSWORD'),database='SQLite',market='US',currency='USD')
+
+@app.get('/api/compute')
+def compute_status():
+    return jsonify(compute.snapshot())
 
 @app.route('/api/maintenance',methods=['GET','POST'])
 @ebay.serialized
@@ -520,10 +525,10 @@ def process_video():
     job_id=str(uuid4()); directory=store.DATA/'uploads'; directory.mkdir(exist_ok=True)
     path=directory/(job_id+ext); f.save(path)
     # Decode validation applies even before a key is configured.
-    try: video.frames(path,job_id)
+    try: sampled,duration=video.frames(path,job_id)
     except Exception:
         path.unlink(missing_ok=True); raise
-    job=store.put('jobs',dict(id=job_id,filename=Path(f.filename).name[:180],path=str(path),notes=request.form.get('notes','')[:4000],status='queued',stage='Queued',message='Video saved',created_at=store.now()))
+    job=store.put('jobs',dict(id=job_id,filename=Path(f.filename).name[:180],path=str(path),notes=request.form.get('notes','')[:4000],status='queued',stage='Queued',message='Video saved',created_at=store.now(),media_prepared=True,duration=duration,frames=[{'second':s['second'],'url':s['url']} for s in sampled]))
     video.executor.submit(video.run,job_id)
     return jsonify({k:v for k,v in job.items() if k!='path'}),202
 
@@ -531,7 +536,12 @@ def process_video():
 def get_job(job_id):
     job=store.get('jobs',job_id)
     if not job: raise Invalid('Upload not found.')
-    return jsonify({k:v for k,v in job.items() if k!='path'})
+    return jsonify({**{k:v for k,v in job.items() if k!='path'},'review_frames':video.review_frames(job)})
+
+@app.post('/api/jobs/<job_id>/items')
+@ebay.serialized
+def add_capture_item(job_id):
+    with _job_lock:return jsonify(video.add_reviewed_item(job_id,body())),201
 
 @app.post('/api/jobs/<job_id>/retry')
 def retry(job_id):
@@ -539,6 +549,7 @@ def retry(job_id):
         job=store.get('jobs',job_id)
         if not job: raise Invalid('Upload not found.')
         if job['status'] not in ['failed','awaiting_key']: raise Invalid('Only failed or pending-key uploads can be retried.')
+        if job.get('seller_added_items'):raise Invalid('This capture already has seller-created drafts. Review them, or upload a new capture for a fresh extraction.')
         if job.get('upload_removed') or not Path(job.get('path','')).is_file():raise Invalid('The original upload was cleaned up. Upload the video again, or restore it from your recovery backup.')
         if not amd.configured(): raise Invalid('Add your AMD key before retrying.')
         job.update(status='queued',message='Queued for another extraction'); store.put('jobs',job)

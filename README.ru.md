@@ -1,3 +1,5 @@
+> AMD optimization update: task routing, bounded concurrency, intent reuse, measured execution dashboard, actionable draft readiness and seller recovery from a saved video frame. Measurements and live-provider limitations: [AMD_PIPELINE.md](docs/AMD_PIPELINE.md).
+
 > October 17 update: product photo uploads/crops/frame selection, safe editor saves, item archive, expanded recorded expenses, private recovery/cleanup and CI acceptance checks. See [release readiness](docs/READINESS.md) and [current validation](docs/VALIDATION.md). Live eBay/Google checks still require seller credentials.
 
 # SnapSell — подготовьте один раз, продавайте на ваших площадках

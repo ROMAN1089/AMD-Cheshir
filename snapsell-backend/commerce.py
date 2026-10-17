@@ -36,10 +36,18 @@ def offline_intents(message):
 
 def reply(item,message,allow_unconfirmed=False):
     provider='Local fact-based assistant'; intents=offline_intents(message); warning=None
+    if item['status']!='listed':
+        return dict(answer='This item is no longer available. Please choose another item from the store.',provider=provider,recommendations=[],intents=['availability'])
+    if not item.get('confirmed') and not allow_unconfirmed:
+        return dict(answer='Product facts need seller review before I can answer reliably. Please ask the seller to confirm the details.',provider=provider,recommendations=[],intents=intents)
     if amd.configured():
         try:
             classified,model=amd.classify(message)
-            if classified: intents=classified
+            if classified:
+                # A probabilistic classifier must not drop an explicit factual
+                # topic such as battery health from a multi-question message.
+                intents=list(dict.fromkeys([*classified,*intents]))
+                if len(intents)>1:intents=[intent for intent in intents if intent!='other']
             provider=f'AMD · {model}'
         except RuntimeError as exc:
             warning=str(exc); provider='Local fallback · AMD unavailable'
