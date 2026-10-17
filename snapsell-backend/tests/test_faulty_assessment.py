@@ -127,7 +127,7 @@ def test_browse_requests_non_working_inventory_and_matches_fault(item,monkeypatc
  def request(path,params=None):
   calls.append((path,params))
   if path.endswith('search'):return {'itemSummaries':[{'itemId':'123'}]}
-  return {'title':'Apple iPhone 16 256GB Unlocked Cracked screen','condition':'For parts or not working','shortDescription':'Whole handset, cracked screen','itemWebUrl':'https://www.ebay.com/itm/1234567890','estimatedAvailabilities':[{'estimatedAvailabilityStatus':'IN_STOCK'}],'itemLocation':{'country':'US'},'price':{'currency':'USD','value':'200'},'seller':{'username':'seller-a'}}
+  return {'buyingOptions':['FIXED_PRICE'],'title':'Apple iPhone 16 256GB Unlocked Cracked screen','condition':'For parts or not working','shortDescription':'Whole handset, cracked screen','itemWebUrl':'https://www.ebay.com/itm/1234567890','estimatedAvailabilities':[{'estimatedAvailabilityStatus':'IN_STOCK'}],'itemLocation':{'country':'US'},'price':{'currency':'USD','value':'200'},'seller':{'username':'seller-a'}}
  monkeypatch.setattr(browse,'request',request)
  rows,_=browse.collect(unit)
  assert 'conditionIds:{7000}' in calls[0][1]['filter'] and 'screen' in calls[0][1]['q'].casefold()

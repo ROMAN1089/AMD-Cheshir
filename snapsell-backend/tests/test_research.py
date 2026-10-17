@@ -28,6 +28,9 @@ def isolated(monkeypatch):
     monkeypatch.setattr(app.amd,'configured',lambda:False)
     monkeypatch.setattr(app.research.browse,'configured',lambda:False)
     monkeypatch.setattr(app.ebay,'dotenv_values',lambda *a,**k:{})
+    monkeypatch.setattr(app.ebay_notifications,'dotenv_values',lambda *a,**k:{})
+    monkeypatch.delenv('EBAY_NOTIFICATION_RELAY',raising=False)
+    monkeypatch.delenv('EBAY_NOTIFICATION_POLL_TOKEN',raising=False)
     for name in ['EBAY_CLIENT_ID','EBAY_CLIENT_SECRET','EBAY_RUNAME','EBAY_REFRESH_TOKEN']:
         monkeypatch.delenv(name,raising=False)
     monkeypatch.setenv('EBAY_ENVIRONMENT','sandbox')

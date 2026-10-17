@@ -170,7 +170,7 @@ def test_official_browse_requires_available_us_offers_and_distinct_sellers(item,
     def api(path,params=None):
         if path=='/item_summary/search':return {'itemSummaries':[{'itemId':str(i)} for i in range(3)]}
         i=path.rsplit('/',1)[-1]
-        return {'itemId':i,'title':'Used Dell UltraSharp U2720Q','condition':'Used','localizedAspects':[{'name':'Screen','value':'27 inch 4K'}],'itemWebUrl':f'https://www.ebay.com/itm/{i}','price':{'value':'250','currency':'USD'},'itemLocation':{'country':'US'},'seller':{'username':'seller'+i},'estimatedAvailabilities':[{'estimatedAvailabilityStatus':'IN_STOCK'}]}
+        return {'buyingOptions':['FIXED_PRICE'],'itemId':i,'title':'Used Dell UltraSharp U2720Q','condition':'Used','localizedAspects':[{'name':'Screen','value':'27 inch 4K'}],'itemWebUrl':f'https://www.ebay.com/itm/{i}','price':{'value':'250','currency':'USD'},'itemLocation':{'country':'US'},'seller':{'username':'seller'+i},'estimatedAvailabilities':[{'estimatedAvailabilityStatus':'IN_STOCK'}]}
     monkeypatch.setattr(browse,'request',api)
     rows,sources=browse.collect(item)
     assert len(rows)==3 and len({r['seller_id'] for r in rows})==3
