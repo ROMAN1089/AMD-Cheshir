@@ -88,11 +88,6 @@ pnpm --dir snapsell-frontend typecheck
 pnpm --dir snapsell-frontend build
 ```
 
-Tests use an isolated database. Source derives from [CollinQ/sbhacks2025](https://github.com/CollinQ/sbhacks2025), preserved with its MIT license under `upstream/`. SQLite provides a persistent single-seller runtime. AMD Token Factory is an experimental development service; deployment for production customers needs an appropriate supported inference endpoint.
-
-The repository's earlier CHESHIRE concept is preserved in [docs/CHESHIRE_CONCEPT.md](docs/CHESHIRE_CONCEPT.md).
-
-Price research now offers US/USD, Kazakhstan/KZT, Japan/JPY and China/CNY selectors, separate similar-product references, source-backed delivery comparisons and opt-in daily refresh. Foreign estimates never overwrite USD inventory accounting. Optional eBay Browse research and explicit seven-day outcome collection are documented in [price research](docs/PRICE_RESEARCH.md). Regional live coverage and credentialed Browse calls have not been established by the isolated tests.
 
 Google Calendar can be connected from Deals: primary-calendar availability checks, automatic pickup event creation and updates, durable retries, and popup reminders. Configure a Web OAuth client and authorize your account using [the Google Calendar guide](docs/GOOGLE_CALENDAR.ru.md). External-calendar edits do not update local meetings. The local Google account was connected and live availability reads plus temporary event creation, rescheduling and cancellation were verified; this does not establish eBay publication or production Google OAuth verification.
 
